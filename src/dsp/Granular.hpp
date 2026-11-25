@@ -20,7 +20,7 @@ public:
     void reset(std::uint32_t seed=1) noexcept {
         bank_.reset(); rng_=seed ? seed : 1; phase_=1; prev_={}; launches_=0;
     }
-    [[nodiscard]] StereoFrame process(SteroFrame in, const GranularParams& p) noexcept {
+    [[nodiscard]] StereoFrame process(StereoFrame in, const GranularParams& p) noexcept {
         if (sr_==0) return {};
         const double density=bounded(p.density,0,1,0);
         if (density>0) {
