@@ -1,0 +1,12 @@
+# CYBERATOR — P001 / v0.0.1 development
+
+Not a plugin binary or release. Development branch: develop/p001; initial engineering receipt on main at 0c21be7bdebbc170e50c94e91a0d673f4db8e528. Read the receipt before changing scope. The unchanged approved concept in README is binding.
+
+## Architecture and dependencies
+- Framework-independent audio core; JUCE host/UI adapter remains to be implemented. Candidate JUCE 9.0.6 commit 654bdbc7a9db0dae90849b44abe91f339e9f0768. Official commercial eligibility and AGPL alternative reviewed; owner eligibility not established. No JUCE source incorporated yet; verify the chosen license before integration/distribution.
+- Evaluate Signalsmith Stretch for formant/pitch processing: inspected upstream README, MIT license and CMake (including Linear dependency 0.6.6). Candidate only, no vendored code. Compare with custom phase-vocoder/PSOLA routes on speech, transients, stereo, latency, CPU and formant independence. Reference https://github.com/Signalsmith-Audio/signalsmith-stretch. Do not treat upstream claims as plugin evidence.
+- Granular and Ghost need controllable causal sample history, unlike a general-purpose pitch/time processor. Use a shared *implementation* of an instance-owned stereo ring (not shared mutable storage across instances/engines). Preallocate off audio thread, explicit age bounds, freeze prevents writing, zero for unavailable samples. Future grain playback must enforce valid read windows, account for advancing history, use normalized window overlap and bandlimited interpolation; reverse swell requires declared lookahead and aligned dry path. No arbitrary window/latency defaults adopted yet.
+
+## Evidence
+History core implemented in src/dsp/History.hpp. Local GCC 14.2.0 C++23 Release CMake/CTest 1/1 PASS; separate strict warnings + AddressSanitizer/UBSan run PASS. Independent deque oracle across five capacities (1,2,3,17,128), wrap, freeze, reset, unavailable ages, stereo, non-finite input, invalid preparation. Deliberate freeze-bypass mutation rejected (exit 1). Tests run on local source copies before connector upload; verify Git blob identity against local source. Direct git network unavailable in local container. No Actions run.
+Remaining: engine processing, interpolation/window design and independent numerical tests; actual JUCE integration/license, Windows build, validator, host, Test Lab, GUI, presets, sonic evaluation and complete audit. No claim of RT timing or plugin-level PASS.
