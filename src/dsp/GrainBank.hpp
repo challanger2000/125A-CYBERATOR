@@ -79,9 +79,9 @@ public:
         history_ = std::move(history); reader_ = std::move(reader); reset();
     }
     void reset() noexcept { history_.reset(); voices_ = {}; }
-    [[nodiscard]] bool trigger(double age, double rate, std::size_t length) noexcept {
+    [[nodiscard]] bool trigger(double age, double rate, std::size_t length, double pan = 0.0) noexcept {
         const int band = SincReader::bandFor(rate);
-        if (band < 0 || std::abs(rate) < 0.25 || !std::isfinite(age) || length < 3 ||
+        if (band < 0 || std::abs(rate) < 0.25 || !std::isfinite(age) || !std::isfinite(pan) || length < 3 ||
             length > history_.capacity()) return false;
         const double span = double(length-1);
         // First output follows at most one new captured frame. Subsequent ages change by capture-rate.
@@ -90,7 +90,8 @@ public:
         if (lo < SincReader::before || history_.valid() <= std::size_t(SincReader::after) ||
             hi >= double(history_.valid() - SincReader::after)) return false;
         for (auto& v : voices_) if (v.length == 0) {
-            v = {age, rate, length, 0, band}; return true;
+            pan = std::clamp(pan, -1.0, 1.0);
+            v = {age, rate, length, 0, band, 1.0-std::max(0.0,pan), 1.0+std::min(0.0,pan)}; return true;
         }
         return false;
     }
@@ -102,18 +103,19 @@ public:
             const double s = std::sin(std::numbers::pi * double(v.position) / double(v.length-1));
             const double w = (v.position == 0 || v.position == v.length-1) ? 0.0 : s*s;
             const auto frame = reader_.read(history_, v.age, v.band);
-            l += w*frame.left; r += w*frame.right; weight += w;
+            l += w*frame.left*v.leftGain; r += w*frame.right*v.rightGain; weight += w;
             v.age -= v.rate;
             if (++v.position == v.length) v = {};
         }
         const double norm = std::max(1.0, weight);
         return {finiteSample(l/norm), finiteSample(r/norm)};
     }
+    [[nodiscard]] std::size_t captured() const noexcept { return history_.valid(); }
     [[nodiscard]] std::size_t active() const noexcept {
         std::size_t n=0; for (const auto& v : voices_) if (v.length) ++n; return n;
     }
 private:
-    struct Voice { double age{}, rate{}; std::size_t length{}, position{}; int band{}; };
+    struct Voice { double age{}, rate{}; std::size_t length{}, position{}; int band{}; double leftGain{}, rightGain{}; };
     History history_;
     SincReader reader_;
     std::array<Voice,maxGrains> voices_{};
