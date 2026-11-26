@@ -50,7 +50,7 @@ public:
         prepared_=false;setLatencySamples(0);
         if(!std::isfinite(sr)||sr<8000||sr>192000)return;
         // Studio path retains the full anticipatory swell. Profile switching needs a host lifecycle contract.
-        engine_.prepare(sr,LatencyProfile::studio);ramp_.prepare(sr);
+        engine_.prepare(sr,LatencyProfile::studio);ramp_.prepare(sr);sampleRate_=sr;
         setLatencySamples(static_cast<int>(engine_.latency()));prepared_=true;
     }
     void releaseResources()override{prepared_=false;}
@@ -98,12 +98,17 @@ private:
                 if(raw_[i]!=nullptr)(void)candidate.set(static_cast<Param>(i),raw_[i]->load());
             if(begin==generation_.load())active_=candidate;
         }
-        double bpm=120.;
-        if(auto* playhead=getPlayHead())if(auto pos=playhead->getPosition())if(auto tempo=pos->getBpm())bpm=*tempo;
+        double bpm=120.;TransportSample transport{};
+        if(auto* playhead=getPlayHead())if(auto pos=playhead->getPosition())if(auto tempo=pos->getBpm()){
+            bpm=*tempo;
+            if(auto ppq=pos->getPpqPosition())transport={*ppq,*tempo,pos->getIsPlaying(),true};
+        }
+        const double ppqStep=usableGrid(transport)?transport.bpm/(60*sampleRate_):0.;
         ramp_.target(active_);
         auto* left=b.getWritePointer(0);auto* right=channels>1?b.getWritePointer(1):nullptr;
         for(int i=0;i<b.getNumSamples();++i){
             auto p=ramp_.advance().engine(bpm);if(bypass)p.mix=0;
+            p.grain.transport=transport;p.grain.transport.ppq+=ppqStep*i;
             const auto y=engine_.process({left[i],right?right[i]:left[i]},p);
             if(right){left[i]=y.left;right[i]=y.right;}
             else left[i]=finiteSample(.5*(double(y.left)+y.right));
@@ -113,7 +118,7 @@ private:
     std::array<std::atomic<float>*,Parameters::count> raw_{};
     std::atomic<unsigned> generation_{0};
     std::atomic_flag restoring_=ATOMIC_FLAG_INIT;
-    Parameters active_;ParameterRamp ramp_;Engine engine_;bool prepared_{};
+    Parameters active_;ParameterRamp ramp_;Engine engine_;double sampleRate_{48000};bool prepared_{};
 };
 } // namespace cyberator
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter(){return new cyberator::Processor();}

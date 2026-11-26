@@ -1,5 +1,6 @@
 #pragma once
 #include "GrainBank.hpp"
+#include "TempoGrid.hpp"
 #include <cstdint>
 #include <stdexcept>
 
@@ -8,6 +9,7 @@ struct GranularParams {
     double sizeMs{60}, density{0.5}, position{}, scatter{}, pitch{}, reverse{}, spread{}, feedback{};
     bool freeze{}, sync{};
     double bpm{120};
+    TransportSample transport{};
 };
 // Provisional physical parameter mapping; the host adapter owns parameter publication.
 class Granular final {
@@ -23,7 +25,10 @@ public:
     [[nodiscard]] StereoFrame process(StereoFrame in, const GranularParams& p) noexcept {
         if (sr_==0) return {};
         const double density=bounded(p.density,0,1,0);
-        if (density>0) {
+        if (density>0 && p.sync && usableGrid(p.transport)) {
+            if (gridTick(p.transport,sr_,gridDivision(density)) && launch(p)) ++launches_;
+            phase_=1; // no off-grid backlog when transport validity changes
+        } else if (density>0) {
             const double hz=density*(p.sync ? 16*bounded(p.bpm,20,400,120)/60 : 64);
             if (phase_>=1) {
                 // At most one launch attempt per sample. Retain a pending tick while history is short.

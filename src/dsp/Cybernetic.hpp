@@ -26,6 +26,7 @@ public:
             fresh.rev_[i]=b;
             if(i<n/2)fresh.twiddle_[i]=std::polar(1.0,-2*std::numbers::pi*double(i)/double(n));
         }
+        for(std::size_t i=0;i<4;++i)fresh.phaseStep_[i]=std::polar(1.0,std::numbers::pi*.5*double(i));
         *this=std::move(fresh);
     }
     void reset() noexcept {
@@ -64,7 +65,7 @@ private:
         // not pitch shifting, and its vocal accuracy must be evaluated separately.
         if(f!=0){
             prefix_[0]=0;
-            for(std::size_t k=0;k<=half;++k)prefix_[k+1]=prefix_[k]+std::log(std::max(1e-12,std::hypot(std::abs(fft_[0][k]),std::abs(fft_[1][k]))));
+            for(std::size_t k=0;k<=half;++k)prefix_[k+1]=prefix_[k]+(.5*std::log(std::max(1e-24,std::norm(fft_[0][k])+std::norm(fft_[1][k]))));
             for(std::size_t k=0;k<=half;++k){const auto lo=k>radius_?k-radius_:0,hi=std::min(half,k+radius_);env_[k]=(prefix_[hi+1]-prefix_[lo])/double(hi-lo+1);}
         }
         const double ratio=std::exp2(f/12),decay=.97*s;
@@ -73,10 +74,10 @@ private:
             if(f!=0){const double source=std::min(double(half),double(k)/ratio);const auto i=std::size_t(source);const double target=env_[i]+(source-double(i))*(env_[std::min(i+1,half)]-env_[i]);gain=std::exp(std::clamp(target-env_[k],-std::log(4.0),std::log(4.0)));}
             C rotation{1,0};
             if(a>0&&k>0&&k<half){
-                const auto ref=std::abs(fft_[0][k])>=std::abs(fft_[1][k])?fft_[0][k]:fft_[1][k];
-                if(std::abs(ref)>1e-12){const double target=std::numbers::pi*.5*double((frame_*k)%4);rotation=std::polar(1.0,a*std::remainder(target-std::arg(ref),2*std::numbers::pi));}
+                const auto ref=std::norm(fft_[0][k])>=std::norm(fft_[1][k])?fft_[0][k]:fft_[1][k];
+                if(std::norm(ref)>1e-24){const double target=std::numbers::pi*.5*double((frame_*k)%4);rotation=std::polar(1.0,a*std::remainder(target-std::arg(ref),2*std::numbers::pi));}
             }
-            const C step=std::polar(1.0,std::numbers::pi*.5*double(k%4));
+            const C step=phaseStep_[k%4];
             for(std::size_t c=0;c<2;++c){
                 auto& bin=fft_[c][k];auto& m=memory_[c][k];
                 m=(1-decay)*bin+decay*m*step;
@@ -88,6 +89,7 @@ private:
         for(std::size_t i=0;i<n_;++i){auto& x=out_[(pos_+i)%n_];const auto w=.5*window_[i];x.left=finiteSample(double(x.left)+w*fft_[0][i].real());x.right=finiteSample(double(x.right)+w*fft_[1][i].real());}
     }
     std::size_t n_{},hop_{},radius_{},pos_{},count_{},frame_{};
+    std::array<C,4> phaseStep_{};
     std::vector<double> window_,env_,prefix_;std::vector<C> twiddle_;std::vector<std::size_t> rev_;
     std::vector<StereoFrame> in_,out_;std::array<std::vector<C>,2> fft_,memory_;
 };
