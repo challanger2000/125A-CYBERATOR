@@ -87,6 +87,18 @@ int main(){
     auto stream=dest.createOutputStream();require(stream!=nullptr,"active screenshot output");
     stream->setPosition(0);stream->truncate();juce::PNGImageFormat png;
     require(png.writeImageToStream(activeImage,*stream),"active screenshot encoded");
+    ed.reset();
+    // Audio continues while closed; reopening before another callback cannot expose old PCM.
+    juce::AudioBuffer<float> closed(2,128);closed.clear();p->processBlock(closed,midi);
+    ed.reset(p->createEditorAndMakeActive());require(ed!=nullptr,"reopen while processing");
+    display=dynamic_cast<ui::SignalDisplay*>(find(*ed,"signal-display"));
+    require(display!=nullptr,"reopened display");
+    display->update();require(!display->hasFrame(),"no stale waveform on reopen");
+    for(std::size_t i=0;i<SignalCapture::frames/128;++i){
+        closed.clear();p->processBlock(closed,midi);
+        for(int j=0;j<128;++j)actual[i*128+std::size_t(j)]=closed.getSample(0,j);
+    }
+    display->update();require(display->hasFrame()&&display->latestFrame().wet==actual,"new epoch exact processor PCM");
     p->releaseResources();
     std::cout<<"Direct native editor smoke PASS\n";
 }

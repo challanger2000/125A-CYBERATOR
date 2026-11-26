@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <cstdint>
+#include <barrier>
 #include "support/PacedTiming.hpp"
 
 void require(bool ok,const char* message) {
@@ -49,17 +50,22 @@ void steadyGain(juce::AudioPluginInstance& p,double expected) {
 }
 
 template<class Create>
-int runRealtime(Create create){
+int runRealtime(Create create,bool parallel=false){
     using cyberator::test::TimingSample;
     using cyberator::test::pace;
     using cyberator::test::summarize;
-    std::ofstream csv("CYBERATOR-rt-groups.csv"),summary("CYBERATOR-rt-summary.csv");
+    const std::string prefix=parallel?"CYBERATOR-rt-parallel-":"CYBERATOR-rt-";
+    std::ofstream csv(prefix+"groups.csv"),summary(prefix+"summary.csv");
+    std::ofstream tracks;if(parallel)tracks.open(prefix+"tracks.csv");
+    if(parallel){require(bool(tracks),"parallel track evidence");tracks<<"rate,block,active,track,group,process_us,start_late_us,finish_late_us\n";tracks<<std::setprecision(10);}
+    std::cout<<"Host reported logical processors "<<std::thread::hardware_concurrency()<<", parallel diagnostic "<<parallel<<'\n';
     require(bool(csv)&&bool(summary),"RT evidence files");
     csv<<"rate,block,instances,active,group,process_us,start_late_us,finish_late_us\n";
     summary<<"rate,block,instances,active,groups,budget_us,p50_us,p95_us,p99_us,max_us,duration_misses,completion_misses,max_start_late_us,max_finish_late_us,delta_energy,status\n";
     csv<<std::setprecision(10);summary<<std::setprecision(10);
     bool anyMiss=false;
     for(double sr:{48000.,96000.,192000.})for(int block:{64,256})for(int n:{1,4})for(bool active:{false,true}){
+        if(parallel&&n!=4)continue;
         std::vector<std::unique_ptr<juce::AudioPluginInstance>> plugins;
         std::vector<juce::AudioBuffer<float>> buffers;
         std::vector<juce::MidiBuffer> midi(static_cast<std::size_t>(n));
@@ -113,12 +119,56 @@ int runRealtime(Create create){
             }
             position+=block;
         };
+        if(!parallel){
         std::thread worker([&]{
             const auto warm=static_cast<std::size_t>(std::ceil(1.25*sr/block));
             for(std::size_t i=0;i<warm;++i){setup(i);process(i);position+=block;}
             rows=pace(sr,block,512,setup,process,observe);
         });
         worker.join();
+        }else{
+            struct Track {std::int64_t position{};double energy{},delta{},maxDryError{};std::vector<TimingSample> rows;};
+            std::vector<Track> perTrack(static_cast<std::size_t>(n));
+            using Clock=std::chrono::steady_clock;
+            Clock::time_point release;
+            std::barrier ready(static_cast<std::ptrdiff_t>(n),[&]()noexcept{release=Clock::now()+std::chrono::milliseconds(20);});
+            std::vector<std::thread> workers;workers.reserve(static_cast<std::size_t>(n));
+            const auto warm=static_cast<std::size_t>(std::ceil(1.25*sr/block));
+            for(int k=0;k<n;++k)workers.emplace_back([&,k]{
+                const auto idx=static_cast<std::size_t>(k);auto& track=perTrack[idx];
+                auto fill=[&](std::size_t){for(int i=0;i<block;++i){const float x=source(track.position+i,k);buffers[idx].setSample(0,i,x);buffers[idx].setSample(1,i,x*.7f);}};
+                auto run=[&](std::size_t){plugins[idx]->processBlock(buffers[idx],midi[idx]);};
+                const auto latency=plugins[idx]->getLatencySamples();
+                auto check=[&](std::size_t){
+                    for(int i=0;i<block;++i){
+                        const float x=source(track.position+i-latency,k);
+                        const double l=buffers[idx].getSample(0,i),r=buffers[idx].getSample(1,i);
+                        require(std::isfinite(l)&&std::isfinite(r),"parallel RT finite audio");
+                        const double dl=l-x,dr=r-x*.7f;
+                        track.energy+=l*l+r*r;track.delta+=dl*dl+dr*dr;track.maxDryError=std::max({track.maxDryError,std::abs(dl),std::abs(dr)});
+                    }
+                    track.position+=block;
+                };
+                for(std::size_t i=0;i<warm;++i){fill(i);run(i);track.position+=block;}
+                ready.arrive_and_wait();
+                track.rows=pace(sr,block,512,fill,run,check,release);
+            });
+            for(auto& thread:workers)thread.join();
+            rows.resize(512);
+            for(std::size_t k=0;k<perTrack.size();++k){
+                const auto& track=perTrack[k];
+                require(track.rows.size()==rows.size()&&track.energy>1,"parallel per-track output and callback count");
+                require(active?track.delta>1:track.maxDryError<1e-6,"parallel per-track PCM witness");
+                energy+=track.energy;delta+=track.delta;maxDryError=std::max(maxDryError,track.maxDryError);
+                for(std::size_t i=0;i<rows.size();++i){
+                    const auto& r=track.rows[i];auto& combined=rows[i];
+                    if(k==0)combined=r;
+                    else{combined.processUs=std::max(combined.processUs,r.processUs);combined.startLateUs=std::max(combined.startLateUs,r.startLateUs);combined.finishLateUs=std::max(combined.finishLateUs,r.finishLateUs);}
+                    tracks<<sr<<','<<block<<','<<active<<','<<k<<','<<i<<','<<r.processUs<<','<<r.startLateUs<<','<<r.finishLateUs<<'\n';
+                }
+            }
+            tracks.flush();require(bool(tracks),"parallel raw evidence write");
+        }
         require(energy>1,"RT non-silent real module output");
         require(active?delta>1:maxDryError<1e-6,"RT active/neutral PCM witness");
         const double budget=1e6*block/sr;const auto s=summarize(rows,budget);
@@ -129,7 +179,7 @@ int runRealtime(Create create){
         std::cout<<sr<<" Hz / "<<block<<" / "<<n<<" instances / active "<<active<<": p99 "<<s.p99<<" us, duration misses "<<s.durationMisses<<", completion misses "<<s.completionMisses<<'\n';
         for(auto& p:plugins)p->releaseResources();
     }
-    std::cout<<"Paced Windows VM VST3 diagnostic: "<<(anyMiss?"RT_FAIL":"RT_PASS_IN_TESTED_MATRIX")<<"; physical ASIO NOT RUN\n";
+    std::cout<<(parallel?"Parallel independent-track diagnostic: ":"Paced serial Windows VM VST3 diagnostic: ")<<(anyMiss?"RT_FAIL":"RT_PASS_IN_TESTED_MATRIX")<<"; physical ASIO NOT RUN\n";
     return anyMiss?3:0;
 }
 
@@ -152,6 +202,7 @@ int main(int argc,char** argv) {
         return p;
     };
     if(argc==3&&std::string_view(argv[2])=="rt")return runRealtime(create);
+    if(argc==3&&std::string_view(argv[2])=="rt-parallel")return runRealtime(create,true);
     if(argc==3){
         require(std::string_view(argv[2])=="editor","editor mode argument");
         auto p=create();prepare(*p);

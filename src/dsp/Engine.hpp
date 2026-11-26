@@ -31,6 +31,7 @@ public:
         motionPhase_=0;routing_.reset();downstreamWarmup_=cyber_.extraLatency();dry_.reset();grainDelay_.reset();granular_.reset();cyber_.reset();harmony_.reset();ghost_.reset();space_.reset();
     }
     [[nodiscard]] std::size_t latency()const noexcept{return latency_;}
+    [[nodiscard]] std::uint64_t grainLaunches()const noexcept{return granular_.launches();}
     [[nodiscard]] StereoFrame process(StereoFrame in,const EngineParams& p,EngineSignals* signals=nullptr) noexcept {
         if(!latency_)return {};
         dry_.capture(in);const auto dry=dry_.read(latency_),base=dry_.read(spectralDelay_);
@@ -57,7 +58,8 @@ public:
         const double m=unit(p.mix);
         if(m==0)return dry; // Exact latency-aligned bypass, even with active engines.
         const double db=std::isfinite(p.outputDb)?std::clamp(p.outputDb,-24.,12.):0.;
-        const auto effected=scale(add(add(wet,sp.delay),sp.reverb),std::exp2(db/6.020599913279624));
+        if(db!=lastDb_){lastDb_=db;outputGain_=std::exp2(db/6.020599913279624);}
+        const auto effected=scale(add(add(wet,sp.delay),sp.reverb),outputGain_);
         return blend(dry,effected,m);
     }
 private:
@@ -70,6 +72,6 @@ private:
         return {finiteSample((1-m)*a.left+m*b.left),finiteSample((1-m)*a.right+m*b.right)};
     }
     History dry_,grainDelay_;Granular granular_;Cybernetic cyber_;Harmony harmony_;Ghost ghost_;Space space_;ParallelRouting routing_;
-    std::size_t spectralDelay_{},latency_{},downstreamWarmup_{};double sr_{},motionPhase_{};
+    std::size_t spectralDelay_{},latency_{},downstreamWarmup_{};double sr_{},motionPhase_{},lastDb_{},outputGain_{1};
 };
 } // namespace cyberator

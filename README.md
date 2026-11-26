@@ -1,7 +1,7 @@
 # 125A CYBERATOR
 **Granular · Spectral · Reverse FX — Between Human and Machine.**
 
-Status: P021 development VST3, 21/21 Windows CTests passed at the pinned source in STATUS.md. Independent QA and high-rate realtime qualification still open; not released. Owner approved 2026-11-25. One standalone VST3 audio effect, C++ with JUCE; Windows x64 primary, portable design, Linux proposed secondary target. No external plugin or speech generator required. Input may be recorded/synthetic speech, vocals, instruments or percussion.
+Status: P025 development VST3, 26/26 Windows CTests and 47/47 official validator tests passed; independent Test Lab technical baseline passed for exact P025 module. High-rate serial realtime qualification and full product audit remain open; not released. Owner approved 2026-11-25. One standalone VST3 audio effect, C++ with JUCE; Windows x64 primary, portable design, Linux proposed secondary target. No external plugin or speech generator required. Input may be recorded/synthetic speech, vocals, instruments or percussion.
 
 ## Product contract
 Four independently usable, combinable engines:

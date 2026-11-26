@@ -111,14 +111,16 @@ private:
         }
         const double ppqStep=usableGrid(transport)?transport.bpm/(60*sampleRate_):0.;
         ramp_.target(active_);
+        auto p=ramp_.current().engine(bpm);if(bypass)p.mix=0;
+        const bool capture=capture_.beginBlock(sampleRate_,engine_.grainLaunches());
         auto* left=b.getWritePointer(0);auto* right=channels>1?b.getWritePointer(1):nullptr;
         for(int i=0;i<b.getNumSamples();++i){
-            auto p=ramp_.advance().engine(bpm);if(bypass)p.mix=0;
+            if(ramp_.smoothing()){p=ramp_.advance().engine(bpm);if(bypass)p.mix=0;}
             p.grain.transport=transport;p.grain.transport.ppq+=ppqStep*i;
-            EngineSignals signals;auto y=engine_.process({left[i],right?right[i]:left[i]},p,&signals);
+            EngineSignals signals;auto y=engine_.process({left[i],right?right[i]:left[i]},p,capture?&signals:nullptr);
             if(right){left[i]=y.left;right[i]=y.right;}
             else{left[i]=finiteSample(.5*(double(y.left)+y.right));y={left[i],left[i]};}
-            capture_.push(signals.dry,y,signals.echo,signals.swell,signals.launches);
+            if(capture)capture_.push(signals.dry,y,signals.echo,signals.swell,signals.launches);
         }
     }
     juce::AudioProcessorValueTreeState state_;

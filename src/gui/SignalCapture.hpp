@@ -1,5 +1,6 @@
 #pragma once
 #include "dsp/GrainBank.hpp"
+#include "CaptureDemand.hpp"
 #include <atomic>
 #include <cstdint>
 
@@ -14,10 +15,20 @@ public:
         double sampleRate{};
         float peakL{},peakR{},echoPeak{},swellPeak{};
         std::uint64_t grains{},serial{};
+        unsigned generation{};
     };
-    void reset(double rate) noexcept {
+    void setReaderActive(bool active)noexcept{demand_.setReaderActive(active);}
+    [[nodiscard]] bool beginBlock(double rate,std::uint64_t launches)noexcept{
+        if(demand_.beginBlock())reset(rate,launches);
+        return demand_.active();
+    }
+    [[nodiscard]] bool readForReader(Snapshot& dest)noexcept{
+        if(!read(dest))return false;
+        return demand_.accepts(dest.generation);
+    }
+    void reset(double rate,std::uint64_t launches=0) noexcept {
         if(writing_>=0)slots_[std::size_t(writing_)].state.store(free,std::memory_order_release);
-        writing_=-1;offset_=0;rate_=rate;lastGrains_=0;
+        writing_=-1;offset_=0;rate_=rate;lastGrains_=launches;
         published_.store(-1,std::memory_order_release);
     }
     void push(StereoFrame dry,StereoFrame wet,StereoFrame echo,StereoFrame swell,std::uint64_t launched) noexcept {
@@ -31,7 +42,7 @@ public:
                 if((expected==free||expected==ready)&&state.compare_exchange_strong(expected,writing,std::memory_order_acquire)){
                     writing_=i;offset_=0;startGrains_=previous;
                     auto& s=slots_[std::size_t(i)].data;
-                    s.sampleRate=rate_;s.peakL=s.peakR=s.echoPeak=s.swellPeak=0;s.grains=0;
+                    s.sampleRate=rate_;s.peakL=s.peakR=s.echoPeak=s.swellPeak=0;s.grains=0;s.generation=demand_.applied();
                     break;
                 }
             }
@@ -62,5 +73,6 @@ private:
     static_assert(std::atomic<int>::is_always_lock_free);
     std::array<Slot,3> slots_{};std::atomic<int> published_{-1};
     int writing_{-1};std::size_t offset_{};double rate_{48000};std::uint64_t startGrains_{},lastGrains_{},serial_{};
+    CaptureDemand demand_;
 };
 } // namespace cyberator

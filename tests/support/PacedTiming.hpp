@@ -25,13 +25,14 @@ inline TimingSummary summarize(const std::vector<TimingSample>& rows,double budg
 // Absolute periodic release times. No deadline is silently shifted or dropped.
 // Timing includes all actual process calls in a group, but not host buffer setup.
 template<class Setup,class Process,class Observe>
-std::vector<TimingSample> pace(double sampleRate,int frames,std::size_t groups,Setup setup,Process process,Observe observe){
+std::vector<TimingSample> pace(double sampleRate,int frames,std::size_t groups,Setup setup,Process process,Observe observe,
+    std::chrono::steady_clock::time_point release={}){
     using Clock=std::chrono::steady_clock;using Us=std::chrono::duration<double,std::micro>;
     if(!std::isfinite(sampleRate)||sampleRate<=0||frames<=0||groups==0)throw std::invalid_argument("pace configuration");
     const auto period=std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(double(frames)/sampleRate));
     if(period<=Clock::duration::zero())throw std::invalid_argument("zero clock period");
     std::vector<TimingSample> result(groups);
-    auto release=Clock::now()+std::chrono::milliseconds(10);
+    if(release==Clock::time_point{})release=Clock::now()+std::chrono::milliseconds(10);
     for(std::size_t i=0;i<groups;++i){
         setup(i);
         const auto early=release-std::chrono::microseconds(500);

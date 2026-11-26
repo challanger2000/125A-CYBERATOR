@@ -79,11 +79,12 @@ private:
 };
 class SignalDisplay final:public Component {
 public:
-    explicit SignalDisplay(SignalCapture& source):source_(source){setComponentID("signal-display");setInterceptsMouseClicks(false,false);}
+    explicit SignalDisplay(SignalCapture& source):source_(source){setComponentID("signal-display");setInterceptsMouseClicks(false,false);source_.setReaderActive(true);}
+    ~SignalDisplay()override{source_.setReaderActive(false);}
     void update(){
         SignalCapture::Snapshot next;
         const auto now=Time::getMillisecondCounterHiRes();
-        if(source_.read(next)&&next.serial!=serial_){
+        if(source_.readForReader(next)&&next.serial!=serial_){
             serial_=next.serial;data_=next;last_=now;valid_=true;analyse();repaint();
         }else if(valid_&&now-last_>550){valid_=false;repaint();}
     }
