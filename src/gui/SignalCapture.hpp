@@ -13,7 +13,7 @@ public:
         std::array<float,frames> dry{},wet{};
         double sampleRate{};
         float peakL{},peakR{},echoPeak{},swellPeak{};
-        std::uint64_t grains{};
+        std::uint64_t grains{},serial{};
     };
     void reset(double rate) noexcept {
         if(writing_>=0)slots_[std::size_t(writing_)].state.store(free,std::memory_order_release);
@@ -44,6 +44,7 @@ public:
         s.swellPeak=std::max({s.swellPeak,std::abs(finiteSample(swell.left)),std::abs(finiteSample(swell.right))});
         if(++offset_==frames){
             s.grains=launched>=startGrains_?launched-startGrains_:0;
+            s.serial=++serial_;
             slot.state.store(ready,std::memory_order_release);
             published_.store(writing_,std::memory_order_release);writing_=-1;
         }
@@ -60,6 +61,6 @@ private:
     struct Slot {std::atomic<int> state{free};Snapshot data;};
     static_assert(std::atomic<int>::is_always_lock_free);
     std::array<Slot,3> slots_{};std::atomic<int> published_{-1};
-    int writing_{-1};std::size_t offset_{};double rate_{48000};std::uint64_t startGrains_{},lastGrains_{};
+    int writing_{-1};std::size_t offset_{};double rate_{48000};std::uint64_t startGrains_{},lastGrains_{},serial_{};
 };
 } // namespace cyberator

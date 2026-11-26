@@ -1,5 +1,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
-#include "control/Parameters.hpp"
+#include "control/SessionState.hpp"
+#include "control/FactoryBank.hpp"
+#include "gui/PanelLayout.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -20,15 +22,16 @@ int main(){
     }
     juce::MemoryBlock original;
     p->getStateInformation(original);
-    require(original.getSize()==cyberator::Parameters::bytes,"native state size");
-    cyberator::Parameters values;
-    require(values.restore(std::span(static_cast<const std::uint8_t*>(original.getData()),original.getSize())),"native state decodes");
+    require(original.getSize()==cyberator::SessionState::bytes,"native state size");
+    cyberator::SessionState initial;
+    require(initial.restore(std::span(static_cast<const std::uint8_t*>(original.getData()),original.getSize())),"native state decodes");
+    auto values=initial.parameters;
     require(values.set(cyberator::Param::mix,0)&&values.set(cyberator::Param::ghost,1)&&values.set(cyberator::Param::output,12),"fixture");
     auto expected=values.save();
     p->setStateInformation(expected.data(),int(expected.size()));
     juce::MemoryBlock recalled;
     p->getStateInformation(recalled);
-    require(recalled.getSize()==expected.size()&&std::memcmp(recalled.getData(),expected.data(),expected.size())==0,"native recall");
+    require(recalled.getSize()==cyberator::SessionState::bytes&&std::memcmp(recalled.getData(),expected.data(),expected.size())==0,"native legacy recall");
     auto broken=expected;broken[9]^=1;
     p->setStateInformation(broken.data(),int(broken.size()));
     juce::MemoryBlock after;p->getStateInformation(after);
