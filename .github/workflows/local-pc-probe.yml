@@ -13,6 +13,26 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Preflight actual launcher before spending build minutes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $PSNativeCommandUseErrorActionPreference=$false
+          $dest='Launcher Preflight ä ß'
+          New-Item -ItemType Directory -Path $dest | Out-Null
+          Copy-Item tools/local-probe/start.bat,tools/local-probe/run-test.ps1 -Destination $dest
+          $env:CI='true'
+          $originalModulePath=$env:PSModulePath
+          $env:PSModulePath='C:\nonexistent-inherited-module-path'
+          try {
+            Push-Location -LiteralPath $dest
+            try {
+              & .\start.bat preflight
+              $code=$LASTEXITCODE
+            } finally { Pop-Location }
+          } finally { $env:PSModulePath=$originalModulePath }
+          if($code -ne 0){throw "Launcher preflight failed: $code"}
+          exit 0
       - name: Download exact qualified P032 product (no plugin rebuild)
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -52,6 +72,13 @@ jobs:
             juce_commit='654bdbc7a9db0dae90849b44abe91f339e9f0768'
             release_approved=$false
           } | ConvertTo-Json | Set-Content probe-package/manifest.json -Encoding UTF8
+      - name: Preserve assembled package before execution (not qualified)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CYBERATOR-P032-PC-Test-UNVERIFIED
+          path: probe-package/
+          if-no-files-found: error
+          retention-days: 14
       - name: Execute packaged diagnostic in Unicode path
         shell: pwsh
         run: |
