@@ -1,5 +1,5 @@
 #include <juce_audio_processors/juce_audio_processors.h>
-#include "control/Parameters.hpp"
+#include "control/ParameterRamp.hpp"
 #include <atomic>
 #include <memory>
 
@@ -50,11 +50,11 @@ public:
         prepared_=false;setLatencySamples(0);
         if(!std::isfinite(sr)||sr<8000||sr>192000)return;
         // Studio path retains the full anticipatory swell. Profile switching needs a host lifecycle contract.
-        engine_.prepare(sr,LatencyProfile::studio);
+        engine_.prepare(sr,LatencyProfile::studio);ramp_.prepare(sr);
         setLatencySamples(static_cast<int>(engine_.latency()));prepared_=true;
     }
     void releaseResources()override{prepared_=false;}
-    void reset()override {if(prepared_)engine_.reset();}
+    void reset()override {if(prepared_){engine_.reset();ramp_.reset();}}
     void processBlock(juce::AudioBuffer<float>& b,juce::MidiBuffer& m)override{render(b,m,false);}
     void processBlockBypassed(juce::AudioBuffer<float>& b,juce::MidiBuffer& m)override{render(b,m,true);}
     void getStateInformation(juce::MemoryBlock& dest)override {
@@ -100,9 +100,10 @@ private:
         }
         double bpm=120.;
         if(auto* playhead=getPlayHead())if(auto pos=playhead->getPosition())if(auto tempo=pos->getBpm())bpm=*tempo;
-        auto p=active_.engine(bpm);if(bypass)p.mix=0;
+        ramp_.target(active_);
         auto* left=b.getWritePointer(0);auto* right=channels>1?b.getWritePointer(1):nullptr;
         for(int i=0;i<b.getNumSamples();++i){
+            auto p=ramp_.advance().engine(bpm);if(bypass)p.mix=0;
             const auto y=engine_.process({left[i],right?right[i]:left[i]},p);
             if(right){left[i]=y.left;right[i]=y.right;}
             else left[i]=finiteSample(.5*(double(y.left)+y.right));
@@ -112,7 +113,7 @@ private:
     std::array<std::atomic<float>*,Parameters::count> raw_{};
     std::atomic<unsigned> generation_{0};
     std::atomic_flag restoring_=ATOMIC_FLAG_INIT;
-    Parameters active_;Engine engine_;bool prepared_{};
+    Parameters active_;ParameterRamp ramp_;Engine engine_;bool prepared_{};
 };
 } // namespace cyberator
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter(){return new cyberator::Processor();}
