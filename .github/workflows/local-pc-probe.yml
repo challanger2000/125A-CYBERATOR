@@ -1,0 +1,84 @@
+name: Physical PC diagnostic package
+on:
+  push:
+    branches: [develop/p001]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  package:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[local-probe]')
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Download exact qualified P032 product (no plugin rebuild)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: CYBERATOR-development-not-release
+          run-id: 45863099407
+          github-token: ${{ github.token }}
+          path: exact-p032
+      - name: Build standalone test host only
+        run: |
+          cmake -S tools/local-probe -B probe-build -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Host configure failed' }
+          cmake --build probe-build --config Release --parallel 2 --target vst3_host_test
+          if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
+      - name: Assemble verified local diagnostic package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $bundle=@(Get-ChildItem exact-p032 -Recurse -Directory -Filter '*.vst3')
+          $hostExe=@(Get-ChildItem probe-build -Recurse -File -Filter 'vst3_host_test.exe')
+          if($bundle.Count -ne 1 -or $hostExe.Count -ne 1){throw 'Expected one bundle and host'}
+          $module=Join-Path $bundle[0].FullName 'Contents\x86_64-win\125A CYBERATOR.vst3'
+          $info=Join-Path $bundle[0].FullName 'Contents\Resources\moduleinfo.json'
+          $hash=(Get-FileHash -LiteralPath $module -Algorithm SHA256).Hash.ToLowerInvariant()
+          if($hash -ne '9120416b8ca928da5d57142e6f3e53a8583064e6508cf20542204e7829ab5423'){throw 'P032 module hash mismatch'}
+          New-Item -ItemType Directory probe-package | Out-Null
+          Copy-Item -LiteralPath $bundle[0].FullName -Destination probe-package -Recurse
+          Copy-Item -LiteralPath $hostExe[0].FullName -Destination probe-package
+          Copy-Item tools/local-probe/start.bat,tools/local-probe/run-test.ps1,tools/local-probe/README-DE.txt -Destination probe-package
+          [ordered]@{
+            product_commit='767156e01d7ffaf0699c8b49d6f86fef59fa33b9'
+            product_run_id=45863099407
+            product_artifact_id=15140226487
+            module_sha256=$hash
+            moduleinfo_sha256=(Get-FileHash -LiteralPath $info -Algorithm SHA256).Hash.ToLowerInvariant()
+            host_commit=$env:GITHUB_SHA
+            host_sha256=(Get-FileHash -LiteralPath $hostExe[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            juce_commit='654bdbc7a9db0dae90849b44abe91f339e9f0768'
+            release_approved=$false
+          } | ConvertTo-Json | Set-Content probe-package/manifest.json -Encoding UTF8
+      - name: Execute packaged diagnostic in Unicode path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $PSNativeCommandUseErrorActionPreference=$false
+          $dest='Probe Test ä ß'
+          Copy-Item -LiteralPath probe-package -Destination $dest -Recurse
+          & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$dest/run-test.ps1" -Mode smoke
+          $code=$LASTEXITCODE
+          if($code -notin @(0,3)){throw "Diagnostic package execution failed: $code"}
+          $report=@(Get-ChildItem -LiteralPath $dest -Directory -Filter 'CYBERATOR-report-*')
+          if($report.Count -ne 1){throw 'Expected one actual report'}
+          $result=Get-Content (Join-Path $report[0].FullName 'result.json') -Raw | ConvertFrom-Json
+          if(-not $result.complete -or $result.module_sha256 -ne '9120416b8ca928da5d57142e6f3e53a8583064e6508cf20542204e7829ab5423'){throw 'Incomplete package evidence'}
+          Write-Host "Package execution verified; measured deadline status $($result.verdict)"
+      - name: Retain package smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CYBERATOR-local-probe-smoke-evidence
+          path: 'Probe Test ä ß/CYBERATOR-report-*.zip'
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Publish development diagnostic artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CYBERATOR-P032-PC-Test-not-release
+          path: probe-package/
+          if-no-files-found: error
+          retention-days: 14

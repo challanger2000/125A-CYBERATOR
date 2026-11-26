@@ -53,7 +53,9 @@ void steadyGain(juce::AudioPluginInstance& p,double expected) {
 }
 
 template<class Create>
-int runRealtime(Create create,bool parallel=false){
+int runRealtime(Create create,bool parallel=false,bool local=false,bool full=false){
+    const std::size_t groups=local?2048:512;
+    const double warmSeconds=local?4.:1.25;
     using cyberator::test::TimingSample;
     using cyberator::test::pace;
     using cyberator::test::summarize;
@@ -61,13 +63,14 @@ int runRealtime(Create create,bool parallel=false){
     std::ofstream csv(prefix+"groups.csv"),summary(prefix+"summary.csv");
     std::ofstream tracks;if(parallel)tracks.open(prefix+"tracks.csv");
     if(parallel){require(bool(tracks),"parallel track evidence");tracks<<"rate,block,active,track,group,process_us,start_late_us,finish_late_us\n";tracks<<std::setprecision(10);}
-    std::cout<<"Host reported logical processors "<<std::thread::hardware_concurrency()<<", parallel diagnostic "<<parallel<<'\n';
+    std::cout<<"Host reported logical processors "<<std::thread::hardware_concurrency()<<", parallel diagnostic "<<parallel<<", groups per case "<<groups<<", warmup seconds "<<warmSeconds<<'\n';
     require(bool(csv)&&bool(summary),"RT evidence files");
     csv<<"rate,block,instances,active,group,process_us,start_late_us,finish_late_us\n";
     summary<<"rate,block,instances,active,groups,budget_us,p50_us,p95_us,p99_us,max_us,duration_misses,completion_misses,max_start_late_us,max_finish_late_us,delta_energy,status\n";
     csv<<std::setprecision(10);summary<<std::setprecision(10);
     bool anyMiss=false;
-    for(double sr:{48000.,96000.,192000.})for(int block:{64,256})for(int n:{1,4})for(bool active:{false,true}){
+    for(double sr:{44100.,48000.,96000.,192000.})for(int block:{64,256})for(int n:{1,4})for(bool active:{false,true}){
+        if((!local&&sr==44100.)||(local&&!full&&sr>48000.))continue;
         if(parallel&&n!=4)continue;
         std::vector<std::unique_ptr<juce::AudioPluginInstance>> plugins;
         std::vector<juce::AudioBuffer<float>> buffers;
@@ -124,9 +127,9 @@ int runRealtime(Create create,bool parallel=false){
         };
         if(!parallel){
         std::thread worker([&]{
-            const auto warm=static_cast<std::size_t>(std::ceil(1.25*sr/block));
+            const auto warm=static_cast<std::size_t>(std::ceil(warmSeconds*sr/block));
             for(std::size_t i=0;i<warm;++i){setup(i);process(i);position+=block;}
-            rows=pace(sr,block,512,setup,process,observe);
+            rows=pace(sr,block,groups,setup,process,observe);
         });
         worker.join();
         }else{
@@ -136,7 +139,7 @@ int runRealtime(Create create,bool parallel=false){
             Clock::time_point release;
             std::barrier ready(static_cast<std::ptrdiff_t>(n),[&]()noexcept{release=Clock::now()+std::chrono::milliseconds(20);});
             std::vector<std::thread> workers;workers.reserve(static_cast<std::size_t>(n));
-            const auto warm=static_cast<std::size_t>(std::ceil(1.25*sr/block));
+            const auto warm=static_cast<std::size_t>(std::ceil(warmSeconds*sr/block));
             for(int k=0;k<n;++k)workers.emplace_back([&,k]{
                 const auto idx=static_cast<std::size_t>(k);auto& track=perTrack[idx];
                 auto fill=[&](std::size_t){for(int i=0;i<block;++i){const float x=source(track.position+i,k);buffers[idx].setSample(0,i,x);buffers[idx].setSample(1,i,x*.7f);}};
@@ -154,10 +157,10 @@ int runRealtime(Create create,bool parallel=false){
                 };
                 for(std::size_t i=0;i<warm;++i){fill(i);run(i);track.position+=block;}
                 ready.arrive_and_wait();
-                track.rows=pace(sr,block,512,fill,run,check,release);
+                track.rows=pace(sr,block,groups,fill,run,check,release);
             });
             for(auto& thread:workers)thread.join();
-            rows.resize(512);
+            rows.resize(groups);
             for(std::size_t k=0;k<perTrack.size();++k){
                 const auto& track=perTrack[k];
                 require(track.rows.size()==rows.size()&&track.energy>1,"parallel per-track output and callback count");
@@ -182,7 +185,7 @@ int runRealtime(Create create,bool parallel=false){
         std::cout<<sr<<" Hz / "<<block<<" / "<<n<<" instances / active "<<active<<": p99 "<<s.p99<<" us, duration misses "<<s.durationMisses<<", completion misses "<<s.completionMisses<<'\n';
         for(auto& p:plugins)p->releaseResources();
     }
-    std::cout<<(parallel?"Parallel independent-track diagnostic: ":"Paced serial Windows VM VST3 diagnostic: ")<<(anyMiss?"RT_FAIL":"RT_PASS_IN_TESTED_MATRIX")<<"; physical ASIO NOT RUN\n";
+    std::cout<<(parallel?"Parallel independent-track diagnostic: ":"Paced serial Windows VST3 diagnostic: ")<<(anyMiss?"RT_FAIL":"RT_PASS_IN_TESTED_MATRIX")<<"; physical ASIO NOT RUN\n";
     return anyMiss?3:0;
 }
 
@@ -375,7 +378,7 @@ int run(Create create){
 int main(int argc,char** argv) {
     require(argc==2||argc==3,"module path argument");
     juce::ScopedJuceInitialiser_GUI init;
-    const juce::File module(juce::String::fromUTF8(argv[1]));
+    const auto module=juce::File::getCurrentWorkingDirectory().getChildFile(juce::String::fromUTF8(argv[1]));
     require(module.existsAsFile(),"exact built module exists");
     const auto bundle=module.getParentDirectory().getParentDirectory().getParentDirectory();
     require(bundle.isDirectory()&&bundle.hasFileExtension("vst3"),"VST3 bundle");
@@ -394,6 +397,10 @@ int main(int argc,char** argv) {
     if(argc==3&&std::string_view(argv[2])=="product")return productCases::run(create);
     if(argc==3&&std::string_view(argv[2])=="rt")return runRealtime(create);
     if(argc==3&&std::string_view(argv[2])=="rt-parallel")return runRealtime(create,true);
+    if(argc==3&&std::string_view(argv[2])=="rt-local")return runRealtime(create,false,true,false);
+    if(argc==3&&std::string_view(argv[2])=="rt-local-parallel")return runRealtime(create,true,true,false);
+    if(argc==3&&std::string_view(argv[2])=="rt-local-full")return runRealtime(create,false,true,true);
+    if(argc==3&&std::string_view(argv[2])=="rt-local-full-parallel")return runRealtime(create,true,true,true);
     if(argc==3){
         require(std::string_view(argv[2])=="editor","editor mode argument");
         auto p=create();prepare(*p);
