@@ -7,6 +7,7 @@
 #include "Modes.hpp"
 namespace cyberator {
 enum class LatencyProfile { studio, live };
+struct EngineSignals { StereoFrame dry{},echo{},swell{}; std::uint64_t launches{}; };
 struct EngineParams {
     GranularParams grain{}; CyberParams cyber{};
     double granular{}, harmony{}, ghost{}, swell{}, delay{}, space{}, mix{1}, outputDb{}, motion{};
@@ -28,7 +29,7 @@ public:
         motionPhase_=0;dry_.reset();grainDelay_.reset();granular_.reset();cyber_.reset();harmony_.reset();ghost_.reset();space_.reset();
     }
     [[nodiscard]] std::size_t latency()const noexcept{return latency_;}
-    [[nodiscard]] StereoFrame process(StereoFrame in,const EngineParams& p) noexcept {
+    [[nodiscard]] StereoFrame process(StereoFrame in,const EngineParams& p,EngineSignals* signals=nullptr) noexcept {
         if(!latency_)return {};
         dry_.capture(in);const auto dry=dry_.read(latency_),base=dry_.read(spectralDelay_);
         const auto& v=shape(p.mode);
@@ -48,6 +49,7 @@ public:
         const auto gh=ghost_.process(voices,unit(unit(p.ghost)*v.ghost),unit(unit(p.swell)*v.swell));
         const auto wet=add(add(gh.dry,gh.echo),gh.swell);
         const auto sp=space_.process(wet,unit(unit(p.delay)*v.delay),unit(unit(p.space)*v.space));
+        if(signals)*signals={dry,gh.echo,gh.swell,granular_.launches()};
         const double m=unit(p.mix);
         if(m==0)return dry; // Exact latency-aligned bypass, even with active engines.
         const double db=std::isfinite(p.outputDb)?std::clamp(p.outputDb,-24.,12.):0.;
