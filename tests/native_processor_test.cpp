@@ -6,12 +6,75 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <new>
+#include "support/AllocationProbe.hpp"
 
 void require(bool ok,const char* msg){if(!ok){std::cerr<<msg<<'\n';std::exit(1);}}
-int main(){
+
+int allocationCases(juce::AudioProcessor& p){
+    using namespace cyberator;
+    using cyberator::test::AllocationProbe;
+    Parameters controls;
+    const std::pair<Param,float> active[]={
+        {Param::granular,.8f},{Param::size,80},{Param::density,.85f},{Param::position,.2f},{Param::scatter,.4f},
+        {Param::pitch,5},{Param::reverse,.4f},{Param::feedback,.5f},{Param::spread,.7f},
+        {Param::formant,4},{Param::android,.6f},{Param::spectral,.7f},{Param::harmony,.6f},
+        {Param::ghost,.6f},{Param::swell,.6f},{Param::delay,.5f},{Param::space,.5f},{Param::motion,.5f},{Param::output,-6}
+    };
+    for(const auto& [id,v]:active)require(controls.set(id,v),"active allocation fixture");
+    auto find=[&](Param id){
+        const auto key=specs[std::size_t(id)].id;
+        for(auto* param:p.getParameters())if(param->getName(128)==juce::String::fromUTF8(key.data(),int(key.size())))return param;
+        return static_cast<juce::AudioProcessorParameter*>(nullptr);
+    };
+    auto* pitch=find(Param::pitch);auto* freeze=find(Param::freeze);auto* mode=find(Param::mode);
+    require(pitch&&freeze&&mode,"automation fixture parameters");
+    // Confirm interposition in this linked executable before trusting zero counts.
+    void* (*volatile allocate)(std::size_t)=::operator new;
+    void (*volatile deallocate)(void*)noexcept=::operator delete;
+    {AllocationProbe probe;auto* ptr=allocate(64);deallocate(ptr);const auto n=probe.finish();
+        require(n.allocations==1&&n.frees==1,"native test deliberate allocation detected");}
+    std::size_t callbacks=0;
+    for(double rate:{48000.,96000.,192000.})for(int channels:{1,2})for(bool editorOpen:{false,true}){
+        auto layout=p.getBusesLayout();auto set=channels==1?juce::AudioChannelSet::mono():juce::AudioChannelSet::stereo();
+        layout.inputBuses.set(0,set);layout.outputBuses.set(0,set);require(p.setBusesLayout(layout),"allocation buses");
+        const auto bytes=controls.save();p.setStateInformation(bytes.data(),int(bytes.size()));
+        p.setRateAndBufferSizeDetails(rate,256);p.prepareToPlay(rate,256);
+        auto destroy=[&](juce::AudioProcessorEditor* editor){if(editor){p.editorBeingDeleted(editor);delete editor;}};
+        std::unique_ptr<juce::AudioProcessorEditor,decltype(destroy)> editor(editorOpen?p.createEditorAndMakeActive():nullptr,destroy);
+        require(!editorOpen||editor!=nullptr,"allocation editor open");
+        juce::AudioBuffer<float> audio(channels,256);juce::MidiBuffer midi;
+        double energy=0;int position=0;std::size_t allocs=0,frees=0;
+        for(int block=0;position<int(rate*.75);++block){
+            const int n=block%2?256:64;
+            audio.setSize(channels,n,false,false,true);
+            if(block%17==0)pitch->setValueNotifyingHost(block%34?.4f:.65f);
+            if(block==20)freeze->setValueNotifyingHost(1);
+            if(block==80)freeze->setValueNotifyingHost(0);
+            if(block%29==0)mode->setValueNotifyingHost(block%58?0.f:1.f);
+            for(int i=0;i<n;++i){const float x=float(.2*std::sin(.041*(position+i))+.1*std::cos(.113*(position+i)));
+                audio.setSample(0,i,x);if(channels==2)audio.setSample(1,i,-.7f*x);}
+            AllocationProbe probe;
+            if(block%5==0)p.processBlockBypassed(audio,midi);else p.processBlock(audio,midi);
+            const auto counts=probe.finish();allocs+=counts.allocations;frees+=counts.frees;++callbacks;
+            for(int c=0;c<channels;++c)for(int i=0;i<n;++i){const double x=audio.getSample(c,i);require(std::isfinite(x),"allocation finite PCM");energy+=x*x;}
+            position+=n;
+        }
+        AllocationProbe probe;p.reset();const auto resetCounts=probe.finish();
+        allocs+=resetCounts.allocations;frees+=resetCounts.frees;
+        std::cout<<rate<<" Hz / "<<channels<<" channels / editor "<<editorOpen<<": new "<<allocs<<", delete "<<frees<<", PCM energy "<<energy<<'\n';
+        require(energy>1,"allocation test processes nonzero audio");
+        require(allocs==0&&frees==0,"no intercepted C++ allocations or frees in processor callbacks/reset");
+        editor.reset();p.releaseResources();
+    }
+    std::cout<<callbacks<<" processor callbacks with C++ allocation interposition PASS\n";return 0;
+}
+
+int main(int argc,char** argv){
     juce::ScopedJuceInitialiser_GUI init;
     std::unique_ptr<juce::AudioProcessor> p(createPluginFilter());
     require(p!=nullptr,"factory");
+    if(argc==2&&std::string_view(argv[1])=="allocation")return allocationCases(*p);
     require(p->getNumPrograms()==1&&p->getProgramName(0)=="Current Settings","named current host program");
     require(p->getParameters().size()==int(cyberator::Parameters::count),"parameter count");
     for(const auto& s:cyberator::specs){

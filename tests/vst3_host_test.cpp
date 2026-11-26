@@ -9,6 +9,7 @@
 #include <barrier>
 #include "support/PacedTiming.hpp"
 #include "support/RenderWitness.hpp"
+#include "support/GridWitness.hpp"
 #include "control/FactoryBank.hpp"
 
 void require(bool ok,const char* message) {
@@ -300,6 +301,77 @@ int run(Create create){
 }
 } // namespace productCases
 
+
+namespace transportCases {
+struct Clock final:juce::AudioPlayHead{
+    PositionInfo position;
+    juce::Optional<PositionInfo> getPosition()const override{return position;}
+};
+template<class Create>
+int run(Create create){
+    using namespace cyberator;
+    for(double rate:{48000.,96000.})for(double bpm:{120.,137.})for(double origin:{-.371,.031}){
+        Clock clock;auto p=create(rate,256);p->setPlayHead(&clock);
+        productCases::Controls controls(*p);Parameters initial;
+        require(initial.set(Param::size,10)&&initial.set(Param::sync,1),"transport fixture");
+        controls.apply(initial);
+        p->setRateAndBufferSizeDetails(rate,256);p->prepareToPlay(rate,256);
+        const int latency=p->getLatencySamples();
+        require(latency==(rate==48000?10240:20480),"actual transport latency");
+        juce::MidiBuffer midi;juce::AudioBuffer<float> audio(2,256);
+        auto position=[&](int sample,bool playing,double ppq){
+            clock.position.setTimeInSamples(static_cast<int64_t>(sample));
+            clock.position.setTimeInSeconds(double(sample)/rate);
+            clock.position.setBpm(bpm);clock.position.setPpqPosition(ppq);clock.position.setIsPlaying(playing);
+        };
+        // Fill a constant stereo source with granular amount zero: no prior grains.
+        const int prefill=int(rate*.5);
+        for(int offset=0;offset<prefill;){
+            const int n=std::min(113,prefill-offset);audio.setSize(2,n,false,false,true);
+            position(offset-prefill,false,origin);
+            for(int i=0;i<n;++i){audio.setSample(0,i,.25f);audio.setSample(1,i,-.125f);}
+            p->processBlock(audio,midi);offset+=n;
+        }
+        require(std::abs(p->getTailLengthSeconds()-30)<1e-4,"initial actual VST3 tail");
+        controls.set(Param::freeze,1);controls.set(Param::granular,1);
+        const int total=int(rate),grainLength=int(std::round(.010*rate));
+        const auto expected=test::frozenGrid(rate,bpm,origin,total,grainLength,.25f,int(.010*rate));
+        std::vector<float> left(total),right(total);
+        double energy=0;const int partition=origin<0?113:256;
+        for(int offset=0;offset<total+latency;){
+            const int n=std::min(partition,total+latency-offset);
+            audio.setSize(2,n,false,false,true);audio.clear();
+            position(offset,true,origin+double(offset)*bpm/(60*rate));
+            p->processBlock(audio,midi);
+            if(offset==0)require(std::isinf(p->getTailLengthSeconds()),"actual VST3 freeze infinite tail");
+            for(int i=0;i<n;++i){
+                const int at=offset+i-latency;if(at<0||at>=total)continue;
+                left[std::size_t(at)]=audio.getSample(0,i);right[std::size_t(at)]=audio.getSample(1,i);
+                energy+=double(left[std::size_t(at)])*left[std::size_t(at)];
+            }
+            offset+=n;
+        }
+        double maxError=0,stereoError=0,wrongClockError=0;
+        const auto wrong=test::frozenGrid(rate,bpm,origin+.03125,total,grainLength,.25f,int(.010*rate));
+        for(std::size_t i=0;i<left.size();++i){
+            maxError=std::max(maxError,std::abs(double(left[i])-expected[i]));
+            stereoError=std::max(stereoError,std::abs(double(right[i])+.5*left[i]));
+            wrongClockError=std::max(wrongClockError,std::abs(double(left[i])-wrong[i]));
+        }
+        std::cout<<rate<<" Hz / "<<bpm<<" BPM / PPQ "<<origin<<": PCM max error "<<maxError<<", stereo "<<stereoError<<", deliberately shifted clock error "<<wrongClockError<<'\n';
+        require(energy>1&&maxError<2e-6&&stereoError<2e-6,"actual loaded VST3 aligns frozen grains to host PPQ");
+        require(wrongClockError>.05,"actual render rejects deliberately shifted timing oracle");
+        controls.set(Param::freeze,0);controls.set(Param::feedback,.1f);
+        audio.clear();position(total+latency,false,origin);p->processBlock(audio,midi);
+        require(std::abs(p->getTailLengthSeconds()-65.75)<1e-3,"actual VST3 finite feedback tail");
+        controls.set(Param::feedback,1);audio.clear();p->processBlock(audio,midi);
+        require(std::isinf(p->getTailLengthSeconds()),"actual VST3 conservative feedback tail");
+        p->setPlayHead(nullptr);p->releaseResources();
+    }
+    std::cout<<"Actual VST3 transport grid PCM and dynamic tail queries PASS\n";return 0;
+}
+}
+
 int main(int argc,char** argv) {
     require(argc==2||argc==3,"module path argument");
     juce::ScopedJuceInitialiser_GUI init;
@@ -318,6 +390,7 @@ int main(int argc,char** argv) {
         require(p!=nullptr,"load actual VST3");
         return p;
     };
+    if(argc==3&&std::string_view(argv[2])=="transport")return transportCases::run(create);
     if(argc==3&&std::string_view(argv[2])=="product")return productCases::run(create);
     if(argc==3&&std::string_view(argv[2])=="rt")return runRealtime(create);
     if(argc==3&&std::string_view(argv[2])=="rt-parallel")return runRealtime(create,true);
