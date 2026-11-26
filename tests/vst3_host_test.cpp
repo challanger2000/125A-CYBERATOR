@@ -375,6 +375,10 @@ int run(Create create){
 }
 }
 
+#if defined(CYBERATOR_ASIO_PROBE)
+#include "support/AsioProbe.hpp"
+#endif
+
 int main(int argc,char** argv) {
     require(argc==2||argc==3,"module path argument");
     juce::ScopedJuceInitialiser_GUI init;
@@ -393,6 +397,10 @@ int main(int argc,char** argv) {
         require(p!=nullptr,"load actual VST3");
         return p;
     };
+#if defined(CYBERATOR_ASIO_PROBE)
+    if(argc==3&&std::string_view(argv[2])=="asio")return asioProbe::run(create,false);
+    if(argc==3&&std::string_view(argv[2])=="asio-selftest")return asioProbe::run(create,true);
+#endif
     if(argc==3&&std::string_view(argv[2])=="transport")return transportCases::run(create);
     if(argc==3&&std::string_view(argv[2])=="product")return productCases::run(create);
     if(argc==3&&std::string_view(argv[2])=="rt")return runRealtime(create);

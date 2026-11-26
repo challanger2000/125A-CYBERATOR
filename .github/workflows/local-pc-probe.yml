@@ -60,7 +60,7 @@ jobs:
           New-Item -ItemType Directory probe-package | Out-Null
           Copy-Item -LiteralPath $bundle[0].FullName -Destination probe-package -Recurse
           Copy-Item -LiteralPath $hostExe[0].FullName -Destination probe-package
-          Copy-Item tools/local-probe/start.bat,tools/local-probe/run-test.ps1,tools/local-probe/README-DE.txt -Destination probe-package
+          Copy-Item tools/local-probe/start.bat,tools/local-probe/run-test.ps1,tools/local-probe/README-DE.txt,tools/local-probe/START-ASIO.BAT -Destination probe-package
           [ordered]@{
             product_commit='767156e01d7ffaf0699c8b49d6f86fef59fa33b9'
             product_run_id=45863099407
@@ -111,18 +111,39 @@ jobs:
           # is ONLY the packaging/execution gate. The report retains exit 3
           # and DEADLINE_MISSES; the product's strict RT gates remain FAIL.
           exit 0
+      - name: Execute ASIO callback selftest without a hardware driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $PSNativeCommandUseErrorActionPreference=$false
+          $dest='ASIO Selftest ä ß'
+          Copy-Item -LiteralPath probe-package -Destination $dest -Recurse
+          $env:CI='true'
+          Push-Location -LiteralPath $dest
+          try {
+            & .\start.bat asio-selftest
+            $code=$LASTEXITCODE
+          } finally { Pop-Location }
+          if($code -ne 0){throw "ASIO selftest execution failed: $code"}
+          $report=@(Get-ChildItem -LiteralPath $dest -Directory -Filter 'CYBERATOR-report-*')
+          if($report.Count -ne 1){throw 'Expected one ASIO selftest report'}
+          $result=Get-Content (Join-Path $report[0].FullName 'result.json') -Raw | ConvertFrom-Json
+          if(-not $result.complete -or $result.verdict -ne 'SELFTEST_ONLY' -or $result.physical_asio -ne 'NOT RUN'){throw 'Invalid ASIO selftest evidence'}
+          exit 0
       - name: Retain package smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: CYBERATOR-local-probe-smoke-evidence
-          path: 'Probe Test ä ß/CYBERATOR-report-*.zip'
+          path: |
+            Probe Test ä ß/CYBERATOR-report-*.zip
+            ASIO Selftest ä ß/CYBERATOR-report-*.zip
           if-no-files-found: warn
           retention-days: 14
       - name: Publish development diagnostic artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: CYBERATOR-P032-PC-Test-not-release
+          name: CYBERATOR-P032-ASIO-Test-not-release
           path: probe-package/
           if-no-files-found: error
           retention-days: 14

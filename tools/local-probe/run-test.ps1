@@ -1,4 +1,4 @@
-param([ValidateSet('normal','full','smoke','preflight')][string]$Mode = 'normal')
+param([ValidateSet('normal','full','smoke','preflight','asio','asio-selftest')][string]$Mode = 'normal')
 $ErrorActionPreference = 'Stop'
 # Do not inherit PowerShell 7 or user-installed module paths into Windows PowerShell 5.1.
 $env:PSModulePath = [System.IO.Path]::Combine($PSHOME,'Modules')
@@ -128,6 +128,36 @@ try {
         $system.power_plan=($plan | Out-String).Trim()
     } catch { $system.metadata_warnings+=('Power plan unavailable: '+$_.Exception.Message) }
     $system | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $report 'system.json') -Encoding UTF8
+    if($Mode -in @('asio','asio-selftest')){
+        $result.diagnostic='Native ASIO callback diagnostic; synthetic input, muted physical outputs. JUCE callback excludes driver buffer conversion and outputReady. No sample-position or acoustic loopback proof.'
+        $relative='..\125A CYBERATOR.vst3\Contents\x86_64-win\125A CYBERATOR.vst3'
+        Push-Location -LiteralPath $report
+        try {
+            & $hostPath $relative $Mode | Tee-Object -FilePath 'asio.stdout.txt'
+            $code=$LASTEXITCODE
+        } finally { Pop-Location }
+        $result.asio_exit=$code
+        if($code -notin @(0,3)){throw "ASIO diagnostic incomplete: $code"}
+        $summary=@(Import-Csv -LiteralPath (Join-Path $report 'CYBERATOR-asio-summary.csv'))
+        $raw=@(Import-Csv -LiteralPath (Join-Path $report 'CYBERATOR-asio-groups.csv'))
+        if($summary.Count -ne 6){throw 'ASIO six-case matrix incomplete'}
+        $total=0;$failed=$false
+        for($i=0;$i -lt 6;$i++){
+            $s=$summary[$i]
+            if([int]$s.case -ne $i -or [int]$s.groups -le 0 -or $s.groups -ne $s.expected -or $s.status -notin @('SELFTEST','FAIL','PASS_IN_OBSERVED_METRICS')){throw 'Invalid ASIO case'}
+            if(($Mode -eq 'asio-selftest') -ne ($s.status -eq 'SELFTEST')){throw 'ASIO evidence mode mismatch'}
+            $total += [int]$s.groups
+            if($s.status -eq 'FAIL'){$failed=$true}
+        }
+        if($raw.Count -ne $total -or ($failed -ne ($code -eq 3))){throw 'ASIO report inconsistent'}
+        $result.complete=$true
+        if($Mode -eq 'asio-selftest'){$result.verdict='SELFTEST_ONLY'}
+        else{
+            $result.physical_asio='EXECUTED'
+            $result.verdict=if($failed){'DEADLINE_MISSES_OR_DRIVER_EVENTS'}else{'PASS_IN_OBSERVED_METRICS'}
+        }
+        $exitCode=$code
+    }else{
     $modes=switch($Mode){
         'normal' {@('rt-local','rt-local-parallel')}
         'full' {@('rt-local-full','rt-local-full-parallel')}
@@ -161,6 +191,7 @@ try {
     }else{
         $result.verdict='DEADLINE_MISSES'
         $exitCode=3
+    }
     }
 }catch{
     $result.error=$_.Exception.Message
