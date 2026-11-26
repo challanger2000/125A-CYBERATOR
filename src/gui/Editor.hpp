@@ -15,6 +15,13 @@ inline const Colour chassis{0xff161b20}, inset{0xff20272e}, edge{0xff3d4851}, te
 inline Rectangle<int> rect(panel::Rect r){return {r.x,r.y,r.w,r.h};}
 inline String str(std::string_view s){return String::fromUTF8(s.data(),static_cast<int>(s.size()));}
 inline String id(Param p){return str(specs[static_cast<std::size_t>(p)].id);}
+inline const char* asset(const String& original,int& bytes){
+    for(int i=0;i<CyberAssets::namedResourceListSize;++i){
+        const auto* key=CyberAssets::namedResourceList[i];
+        if(original==CyberAssets::getNamedResourceOriginalFilename(key))return CyberAssets::getNamedResource(key,bytes);
+    }
+    bytes=0;return nullptr;
+}
 inline String format(Param p,double x){
     if(p==Param::size)return String(x,0)+" ms";
     if(p==Param::pitch||p==Param::formant)return String(x,1)+" st";
@@ -49,9 +56,9 @@ public:
         auto& cache=cache_[static_cast<std::size_t>(family)];
         if(cache.scale!=selected){
             cache.scale=selected;cache.strip={};
-            const auto resource="knob_"+f+"_"+String(selected)+"_png";
+            const auto resource="knob_"+f+"_"+String(selected)+".png";
             int size=0;
-            if(const auto* data=CyberAssets::getNamedResource(resource.toRawUTF8(),size)){
+            if(const auto* data=asset(resource,size)){
                 auto decoded=ImageFileFormat::loadFrom(data,static_cast<std::size_t>(size));
                 const int expected=nominal*selected/100;
                 if(decoded.isValid()&&decoded.getWidth()==expected&&decoded.getHeight()==expected*128)
@@ -67,6 +74,7 @@ public:
         g.setImageResamplingQuality(Graphics::highResamplingQuality);
         g.drawImage(cache.strip,x+(w-d)/2,y+(h-d)/2,d,d,0,frame*px,px,px,false);
     }
+    [[nodiscard]] bool artworkReady()const noexcept{for(const auto& c:cache_)if(!c.strip.isValid())return false;return true;}
 private:
     struct Cache{int scale{};Image strip;};
     std::array<Cache,3> cache_;
@@ -147,11 +155,8 @@ class Content final:public Component,private Timer {
 public:
     using Apply=std::function<bool(const Parameters&)>;
     Content(APVTS& state,SignalCapture& capture,Apply apply):state_(state),apply_(std::move(apply)),display_(capture){
-        setSize(panel::width,panel::height);setLookAndFeel(&look_);
-        int length=0;if(auto* bytes=CyberAssets::getNamedResource("125A_Logo_Master_FINAL_svg",length))
-            logo_=Drawable::createFromImageData(bytes,static_cast<std::size_t>(length));
-        // BinaryData identifiers may prepend an underscore to a leading digit.
-        if(!logo_)if(auto* bytes=CyberAssets::getNamedResource("_125A_Logo_Master_FINAL_svg",length))
+        setComponentID("cyberator-panel");setSize(panel::width,panel::height);setLookAndFeel(&look_);
+        int length=0;if(auto* bytes=asset("125A_Logo_Master_FINAL.svg",length))
             logo_=Drawable::createFromImageData(bytes,static_cast<std::size_t>(length));
         for(std::size_t i=0;i<panel::knobs.size();++i){
             const auto& k=panel::knobs[i];const auto p=k.param;auto slider=std::make_unique<Slider>();
@@ -193,6 +198,7 @@ public:
         startTimerHz(30);
     }
     ~Content()override{stopTimer();setLookAndFeel(nullptr);}
+    [[nodiscard]] bool artworkReady()const noexcept{return logo_!=nullptr&&look_.artworkReady();}
     void paint(Graphics& g)override{
         g.fillAll(chassis);g.setColour(inset);g.fillRect(0,0,panel::width,90);
         g.setColour(edge);g.drawHorizontalLine(89,0,float(panel::width));

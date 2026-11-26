@@ -44,7 +44,7 @@ void steadyGain(juce::AudioPluginInstance& p,double expected) {
     }
 }
 int main(int argc,char** argv) {
-    require(argc==2,"module path argument");
+    require(argc==2||argc==3,"module path argument");
     juce::ScopedJuceInitialiser_GUI init;
     const juce::File module(juce::String::fromUTF8(argv[1]));
     require(module.existsAsFile(),"exact built module exists");
@@ -61,6 +61,27 @@ int main(int argc,char** argv) {
         require(p!=nullptr,"load actual VST3");
         return p;
     };
+    if(argc==3){
+        require(std::string_view(argv[2])=="editor","editor mode argument");
+        auto p=create();prepare(*p);
+        require(p->hasEditor(),"VST3 advertises editor");
+        juce::MemoryBlock before;p->getStateInformation(before);
+        for(int repeat=0;repeat<2;++repeat){
+            auto destroy=[&](juce::AudioProcessorEditor* editor){if(editor){editor->setVisible(false);editor->removeFromDesktop();p->editorBeingDeleted(editor);delete editor;}};
+            std::unique_ptr<juce::AudioProcessorEditor,decltype(destroy)> ed(p->createEditorAndMakeActive(),destroy);
+            require(ed&&ed->getWidth()>0&&ed->getHeight()>0,"VST3 creates actual editor");
+            ed->addToDesktop(juce::ComponentPeer::windowHasTitleBar);
+            ed->setVisible(true);
+            require(ed->getPeer()!=nullptr,"native parent peer created");
+            // Wrapper attaches IPlugView when showing; no claim of physical mouse/DPI verification.
+            auto img=ed->createComponentSnapshot(ed->getLocalBounds(),true);
+            require(img.isValid(),"VST3 editor snapshot allocation");
+        }
+        require(p->getActiveEditor()==nullptr,"VST3 host unregisters editor");
+        dryImpulse(*p);
+        p->releaseResources();
+        std::cout<<"Actual VST3 editor create/peer/reopen and neutral audio smoke PASS\n";return 0;
+    }
     auto a=create(),b=create();prepare(*a);prepare(*b);
     dryImpulse(*a);dryImpulse(*b);
     auto* output=find(*a,"output");require(output!=nullptr,"host output parameter");

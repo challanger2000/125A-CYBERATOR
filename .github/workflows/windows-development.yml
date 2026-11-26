@@ -18,6 +18,14 @@ jobs:
         run: cmake --build build --config Release --parallel 2
       - name: Core and native processor tests
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Preserve editor screenshots even on test failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CYBERATOR-editor-evidence
+          path: build/CYBERATOR-editor-*.png
+          if-no-files-found: warn
+          retention-days: 3
       - name: Verify development bundle
         shell: pwsh
         run: |
