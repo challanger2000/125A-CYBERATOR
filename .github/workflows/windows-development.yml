@@ -1,0 +1,32 @@
+name: Windows development verification
+on:
+  push:
+    branches: [develop/p001]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[windows-build]')
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Configure pinned JUCE and core
+        run: cmake -S . -B build -A x64 -DCYBERATOR_BUILD_VST3=ON -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Core and native processor tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Verify development bundle
+        shell: pwsh
+        run: |
+          $module = Get-ChildItem -Path build -Recurse -File -Filter '*.vst3' | Where-Object { $_.FullName -match 'x86_64-win' }
+          if (@($module).Count -ne 1) { throw "Expected exactly one Windows VST3 module" }
+          Get-FileHash $module.FullName -Algorithm SHA256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CYBERATOR-development-not-release
+          path: build/Cyberator_artefacts/Release/VST3/
+          if-no-files-found: error
+          retention-days: 3
