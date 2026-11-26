@@ -59,14 +59,31 @@ jobs:
           $PSNativeCommandUseErrorActionPreference=$false
           $dest='Probe Test ä ß'
           Copy-Item -LiteralPath probe-package -Destination $dest -Recurse
-          & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$dest/run-test.ps1" -Mode smoke
-          $code=$LASTEXITCODE
+          # Exercise the actual user entrypoint and default longer matrix.
+          $env:CI='true'
+          Push-Location -LiteralPath $dest
+          try {
+            & .\start.bat
+            $code=$LASTEXITCODE
+          } finally { Pop-Location }
           if($code -notin @(0,3)){throw "Diagnostic package execution failed: $code"}
           $report=@(Get-ChildItem -LiteralPath $dest -Directory -Filter 'CYBERATOR-report-*')
           if($report.Count -ne 1){throw 'Expected one actual report'}
           $result=Get-Content (Join-Path $report[0].FullName 'result.json') -Raw | ConvertFrom-Json
           if(-not $result.complete -or $result.module_sha256 -ne '9120416b8ca928da5d57142e6f3e53a8583064e6508cf20542204e7829ab5423'){throw 'Incomplete package evidence'}
+          if($result.mode -ne 'normal' -or $result.physical_asio -ne 'NOT RUN' -or $null -ne $result.error){throw 'Unexpected diagnostic mode or execution status'}
+          if($result.serial_exit -notin @(0,3) -or $result.parallel_exit -notin @(0,3)){throw 'Invalid native exits'}
+          $expectedCode=if($result.serial_exit -eq 0 -and $result.parallel_exit -eq 0){0}else{3}
+          $expectedVerdict=if($expectedCode -eq 0){'PASS_IN_TESTED_MATRIX'}else{'DEADLINE_MISSES'}
+          if($code -ne $expectedCode -or $result.verdict -ne $expectedVerdict){throw 'Launcher exit and report disagree'}
+          $reportZip=@(Get-ChildItem -LiteralPath $dest -File -Filter 'CYBERATOR-report-*.zip')
+          if($reportZip.Count -ne 1 -or $reportZip[0].Length -le 0){throw 'Missing report archive'}
           Write-Host "Package execution verified; measured deadline status $($result.verdict)"
+          # GitHub's generated pwsh wrapper propagates LASTEXITCODE unless we
+          # explicitly return success for a valid completed diagnostic. This
+          # is ONLY the packaging/execution gate. The report retains exit 3
+          # and DEADLINE_MISSES; the product's strict RT gates remain FAIL.
+          exit 0
       - name: Retain package smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
