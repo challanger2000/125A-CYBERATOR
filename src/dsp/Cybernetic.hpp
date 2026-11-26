@@ -17,7 +17,8 @@ public:
         fresh.radius_=std::max(std::size_t(1),std::size_t(std::round(350*double(n)/sr)));
         fresh.window_.resize(n); fresh.twiddle_.resize(n/2); fresh.rev_.resize(n);
         fresh.in_.resize(n); fresh.out_.resize(n);
-        for(auto& a:fresh.fft_) a.resize(n);
+        fresh.packed_.resize(n);
+        for(auto& a:fresh.fft_) a.resize(n/2+1);
         for(auto& a:fresh.memory_) a.resize(n/2+1);
         fresh.env_.resize(n/2+1);fresh.prefix_.resize(n/2+2);
         for(std::size_t i=0;i<n;++i){
@@ -58,8 +59,20 @@ private:
     }
     void transform(const CyberParams& p) noexcept {
         const auto half=n_/2;
-        for(std::size_t i=0;i<n_;++i){const auto x=in_[(pos_+i)%n_];fft_[0][i]=double(x.left)*window_[i];fft_[1][i]=double(x.right)*window_[i];}
-        for(auto& a:fft_)fft(a,false);
+        // Pack two real channels into one complex transform. For Z=FFT(L+iR),
+        // L=(Z+conj(Z[-k]))/2 and R=(Z-conj(Z[-k]))/(2i).
+        bool zeroL=true,zeroR=true,same=true,anti=true;
+        for(std::size_t i=0;i<n_;++i){const auto x=in_[(pos_+i)%n_];
+            zeroL&=x.left==0;zeroR&=x.right==0;same&=x.left==x.right;anti&=x.left==-x.right;
+            packed_[i]={double(x.left)*window_[i],double(x.right)*window_[i]};
+        }
+        fft(packed_,false);
+        for(std::size_t k=0;k<=half;++k){
+            const auto z=packed_[k],mirror=std::conj(packed_[(n_-k)%n_]);
+            const auto sum=(z+mirror)*.5,diff=(z-mirror)*.5;
+            fft_[0][k]=zeroL?C{}:sum;
+            fft_[1][k]=zeroR?C{}:same?fft_[0][k]:anti?-fft_[0][k]:C{diff.imag(),-diff.real()};
+        }
         const double f=bounded(p.formant,-12,12),a=bounded(p.android,0,1),s=bounded(p.spectral,0,1);
         // Smooth log magnitude across approximately 700 Hz. This is envelope warping,
         // not pitch shifting, and its vocal accuracy must be evaluated separately.
@@ -69,28 +82,37 @@ private:
             for(std::size_t k=0;k<=half;++k){const auto lo=k>radius_?k-radius_:0,hi=std::min(half,k+radius_);env_[k]=(prefix_[hi+1]-prefix_[lo])/double(hi-lo+1);}
         }
         const double ratio=std::exp2(f/12),decay=.97*s;
+        bool outZeroL=true,outZeroR=true,outSame=true,outAnti=true;
         for(std::size_t k=0;k<=half;++k){
             double gain=1;
             if(f!=0){const double source=std::min(double(half),double(k)/ratio);const auto i=std::size_t(source);const double target=env_[i]+(source-double(i))*(env_[std::min(i+1,half)]-env_[i]);gain=std::exp(std::clamp(target-env_[k],-std::log(4.0),std::log(4.0)));}
             C rotation{1,0};
             if(a>0&&k>0&&k<half){
-                const auto ref=std::norm(fft_[0][k])>=std::norm(fft_[1][k])?fft_[0][k]:fft_[1][k];
-                if(std::norm(ref)>1e-24){const double target=std::numbers::pi*.5*double((frame_*k)%4);rotation=std::polar(1.0,a*std::remainder(target-std::arg(ref),2*std::numbers::pi));}
+                const double leftPower=std::norm(fft_[0][k]),rightPower=std::norm(fft_[1][k]);
+                // Deterministic tie break: numerical noise must not choose a different stereo reference.
+                const auto ref=leftPower>=rightPower*(1-1e-9)?fft_[0][k]:fft_[1][k];
+                if(std::norm(ref)>1e-24){const double target=std::numbers::pi*.5*double((frame_*k)%4);double delta=std::remainder(target-std::arg(ref),2*std::numbers::pi);
+                    if(std::abs(std::abs(delta)-std::numbers::pi)<1e-9)delta=std::numbers::pi;
+                    rotation=std::polar(1.0,a*delta);}
             }
             const C step=phaseStep_[k%4];
             for(std::size_t c=0;c<2;++c){
                 auto& bin=fft_[c][k];auto& m=memory_[c][k];
                 m=(1-decay)*bin+decay*m*step;
                 bin=((1-s)*bin+s*m)*gain*rotation;
-                if(k==0||k==half)bin={bin.real(),0};else fft_[c][n_-k]=std::conj(bin);
+                if(k==0||k==half)bin={bin.real(),0};
             }
+            const auto l=fft_[0][k],r=fft_[1][k];
+            outZeroL&=l==C{};outZeroR&=r==C{};outSame&=l==r;outAnti&=l==-r;
+            packed_[k]=l+C{-r.imag(),r.real()};
+            if(k>0&&k<half)packed_[n_-k]=std::conj(l)+C{r.imag(),r.real()};
         }
-        for(auto& v:fft_)fft(v,true);
-        for(std::size_t i=0;i<n_;++i){auto& x=out_[(pos_+i)%n_];const auto w=.5*window_[i];x.left=finiteSample(double(x.left)+w*fft_[0][i].real());x.right=finiteSample(double(x.right)+w*fft_[1][i].real());}
+        fft(packed_,true);
+        for(std::size_t i=0;i<n_;++i){auto& x=out_[(pos_+i)%n_];const auto w=.5*window_[i];const double l=outZeroL?0:packed_[i].real();const double r=outZeroR?0:outSame?l:outAnti?-l:packed_[i].imag();x.left=finiteSample(double(x.left)+w*l);x.right=finiteSample(double(x.right)+w*r);}
     }
     std::size_t n_{},hop_{},radius_{},pos_{},count_{},frame_{};
     std::array<C,4> phaseStep_{};
-    std::vector<double> window_,env_,prefix_;std::vector<C> twiddle_;std::vector<std::size_t> rev_;
+    std::vector<double> window_,env_,prefix_;std::vector<C> twiddle_,packed_;std::vector<std::size_t> rev_;
     std::vector<StereoFrame> in_,out_;std::array<std::vector<C>,2> fft_,memory_;
 };
 } // namespace cyberator
