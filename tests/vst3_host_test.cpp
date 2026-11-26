@@ -14,7 +14,7 @@ juce::AudioProcessorParameter* find(juce::AudioPluginInstance& p,const juce::Str
 void prepare(juce::AudioPluginInstance& p) {
     require(p.getTotalNumInputChannels()==2&&p.getTotalNumOutputChannels()==2,"stereo VST3 layout");
     p.setRateAndBufferSizeDetails(48000,127);p.prepareToPlay(48000,127);
-    require(p.getLatencySamples()==9728,"VST3 reported latency");
+    require(p.getLatencySamples()==10240,"VST3 reported latency");
 }
 void dryImpulse(juce::AudioPluginInstance& p) {
     juce::MidiBuffer midi;

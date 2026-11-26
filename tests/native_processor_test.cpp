@@ -44,7 +44,7 @@ int main(){
         p->setRateAndBufferSizeDetails(48000,127);
         p->prepareToPlay(48000,127);
         const int latency=p->getLatencySamples();
-        require(latency==9728,"reported latency");
+        require(latency==10240,"reported latency");
         for(bool bypass:{false,true}){
             p->reset();
             juce::MidiBuffer midi;

@@ -21,12 +21,13 @@ public:
         Engine fresh;const bool live=profile==LatencyProfile::live;
         fresh.granular_.prepare(sr);fresh.cyber_.prepare(sr,live);fresh.harmony_.prepare(sr);
         fresh.ghost_.prepare(sr,live);fresh.space_.prepare(sr);fresh.sr_=sr;
+        fresh.downstreamWarmup_=fresh.cyber_.extraLatency();
         fresh.spectralDelay_=fresh.cyber_.latency();fresh.latency_=fresh.spectralDelay_+fresh.ghost_.latency();
         fresh.dry_.prepare(fresh.latency_+1);fresh.grainDelay_.prepare(fresh.spectralDelay_+1);
         *this=std::move(fresh);
     }
     void reset() noexcept {
-        motionPhase_=0;dry_.reset();grainDelay_.reset();granular_.reset();cyber_.reset();harmony_.reset();ghost_.reset();space_.reset();
+        motionPhase_=0;downstreamWarmup_=cyber_.extraLatency();dry_.reset();grainDelay_.reset();granular_.reset();cyber_.reset();harmony_.reset();ghost_.reset();space_.reset();
     }
     [[nodiscard]] std::size_t latency()const noexcept{return latency_;}
     [[nodiscard]] StereoFrame process(StereoFrame in,const EngineParams& p,EngineSignals* signals=nullptr) noexcept {
@@ -44,6 +45,8 @@ public:
         grainDelay_.capture(granular_.process(in,gp));const auto grain=grainDelay_.read(spectralDelay_);
         const bool cyberActive=nonzero(cp.formant)||cp.android>0||cp.spectral>0;
         const auto main=cyberActive?blend(cg,grain,g/(1+g)):blend(base,grain,g);
+        // Align downstream time-varying phases to the original signal timeline.
+        if(downstreamWarmup_){--downstreamWarmup_;if(signals)*signals={dry,{},{},granular_.launches()};return dry;}
         const auto harmony=harmony_.process(main,unit(unit(p.harmony)*v.harmony));
         const auto voices=add(main,harmony);
         const auto gh=ghost_.process(voices,unit(unit(p.ghost)*v.ghost),unit(unit(p.swell)*v.swell));
@@ -67,6 +70,6 @@ private:
         return {finiteSample((1-m)*a.left+m*b.left),finiteSample((1-m)*a.right+m*b.right)};
     }
     History dry_,grainDelay_;Granular granular_;Cybernetic cyber_;Harmony harmony_;Ghost ghost_;Space space_;
-    std::size_t spectralDelay_{},latency_{};double sr_{},motionPhase_{};
+    std::size_t spectralDelay_{},latency_{},downstreamWarmup_{};double sr_{},motionPhase_{};
 };
 } // namespace cyberator

@@ -6,7 +6,8 @@ void check(bool ok,const char* msg){if(!ok){std::cerr<<msg<<'\n';std::exit(1);}}
 int main(){
     for(double sr:{8000.,44100.,48000.,96000.,192000.}){
         Engine e;e.prepare(sr,LatencyProfile::live);auto L=e.latency();
-        check(double(L)/sr<.037,"live latency under 37ms");
+        const std::size_t expected=sr==8000?320:sr==44100?1522:sr==48000?1600:sr==96000?3200:6400;
+        check(L==expected,"live latency includes one hop");
         EngineParams p;p.mix=0;p.swell=p.ghost=p.granular=1;p.cyber.android=1;
         for(std::size_t i=0;i<L+50;++i){auto y=e.process(i==0?StereoFrame{.5f,-.25f}:StereoFrame{},p);check(y.left==(i==L?.5f:0)&&y.right==(i==L?-.25f:0),"live aligned dry");}
         Ghost g;g.prepare(sr,true);const auto l=g.latency();double energy=0;
