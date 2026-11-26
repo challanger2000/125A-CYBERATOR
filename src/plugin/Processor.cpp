@@ -1,6 +1,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "control/ParameterRamp.hpp"
 #include "control/SessionState.hpp"
+#include "control/TailPolicy.hpp"
 #include "gui/Editor.hpp"
 #include <atomic>
 #include <memory>
@@ -36,7 +37,16 @@ public:
     bool acceptsMidi()const override{return false;}
     bool producesMidi()const override{return false;}
     bool isMidiEffect()const override{return false;}
-    double getTailLengthSeconds()const override{return 30.0;} // provisional conservative reporting; measure before release
+    double getTailLengthSeconds()const override{
+        const auto generation=generation_.load();
+        const auto* freeze=raw_[static_cast<std::size_t>(Param::freeze)];
+        const auto* feedback=raw_[static_cast<std::size_t>(Param::feedback)];
+        if((generation&1u)||!freeze||!feedback)return std::numeric_limits<double>::infinity();
+        const bool frozen=freeze->load()>.5f;
+        const double fb=feedback->load();
+        if(generation!=generation_.load())return std::numeric_limits<double>::infinity();
+        return tailSeconds(frozen,fb);
+    }
     int getNumPrograms()override{return 1;}
     int getCurrentProgram()override{return 0;}
     void setCurrentProgram(int)override{}

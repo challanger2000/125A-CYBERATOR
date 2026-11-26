@@ -1,5 +1,6 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "control/SessionState.hpp"
+#include "control/TailPolicy.hpp"
 #include "control/FactoryBank.hpp"
 #include "gui/PanelLayout.hpp"
 #include <cstdlib>
@@ -26,6 +27,18 @@ int main(){
     require(original.getSize()==cyberator::SessionState::bytes,"native state size");
     cyberator::SessionState initial;
     require(initial.restore(std::span(static_cast<const std::uint8_t*>(original.getData()),original.getSize())),"native state decodes");
+    require(p->getTailLengthSeconds()==30,"default finite tail");
+    for(float feedback:{.1f,.3f,1.f}){
+        auto v=initial.parameters;require(v.set(cyberator::Param::feedback,feedback),"tail feedback fixture");
+        auto bytes=v.save();p->setStateInformation(bytes.data(),int(bytes.size()));
+        const auto tail=p->getTailLengthSeconds(),expected=cyberator::tailSeconds(false,feedback);
+        require(tail==expected,"actual processor feedback tail follows restored state");
+    }
+    auto frozen=initial.parameters;require(frozen.set(cyberator::Param::freeze,1),"freeze tail fixture");
+    auto frozenBytes=frozen.save();p->setStateInformation(frozenBytes.data(),int(frozenBytes.size()));
+    require(std::isinf(p->getTailLengthSeconds()),"frozen capture infinite tail");
+    p->setStateInformation(original.getData(),int(original.getSize()));
+    require(p->getTailLengthSeconds()==30,"default tail restored");
     auto values=initial.parameters;
     require(values.set(cyberator::Param::mix,0)&&values.set(cyberator::Param::ghost,1)&&values.set(cyberator::Param::output,12),"fixture");
     auto expected=values.save();
