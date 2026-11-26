@@ -35,6 +35,13 @@ int main(){
         require(state(*p).parameters.save()==before,"editor open neutral");
         auto* preset=dynamic_cast<juce::ComboBox*>(find(*ed,"factory-preset"));
         require(preset&&preset->getNumItems()==120,"all factory presets exposed");
+        // Exercise the real menu callback for every factory slot before returning to preset 1.
+        for(std::size_t index=0;index<factoryBank.size();++index){
+            preset->setSelectedId(int(index+1),juce::sendNotificationSync);
+            auto actual=state(*p);
+            for(std::size_t i=0;i<Parameters::count;++i)
+                require(std::abs(actual.parameters.get(static_cast<Param>(i))-factoryBank[index].values[i])<.0001f,"all menu presets update full host state");
+        }
         preset->setSelectedId(1,juce::sendNotificationSync);
         auto recalled=state(*p);
         for(std::size_t i=0;i<Parameters::count;++i)require(std::abs(recalled.parameters.get(static_cast<Param>(i))-factoryBank[0].values[i])<.0001f,"preset host state");

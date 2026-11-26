@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <barrier>
 #include "support/PacedTiming.hpp"
+#include "support/RenderWitness.hpp"
+#include "control/FactoryBank.hpp"
 
 void require(bool ok,const char* message) {
     if(!ok){std::cerr<<message<<'\n';std::exit(1);}
@@ -183,6 +185,121 @@ int runRealtime(Create create,bool parallel=false){
     return anyMiss?3:0;
 }
 
+
+// Native host parameter and opaque project-state tests; no direct access to product processor.
+// The bank is an expected-value manifest only; every render passes through the actual VST3.
+namespace productCases {
+using namespace cyberator;
+using cyberator::test::compare;
+using cyberator::test::audibleChange;
+using cyberator::test::recallMatches;
+constexpr int rate=48000,frames=96000;
+struct Controls {
+    std::array<juce::AudioProcessorParameter*,Parameters::count> p{};
+    explicit Controls(juce::AudioPluginInstance& plugin){
+        for(std::size_t i=0;i<p.size();++i){
+            p[i]=find(plugin,juce::String::fromUTF8(specs[i].id.data(),int(specs[i].id.size())));
+            require(p[i]!=nullptr,"every host parameter available");
+        }
+    }
+    void set(Param id,float physical)const{
+        const auto i=std::size_t(id);const auto& s=specs[i];
+        const float normalized=(physical-s.low)/(s.high-s.low);
+        p[i]->beginChangeGesture();p[i]->setValueNotifyingHost(normalized);p[i]->endChangeGesture();
+        require(std::abs(p[i]->getValue()-normalized)<1e-4f,"host value accepted");
+    }
+    void apply(const Parameters& values)const{for(std::size_t i=0;i<p.size();++i)set(static_cast<Param>(i),values.get(static_cast<Param>(i)));}
+    void verify(const Parameters& values)const{
+        for(std::size_t i=0;i<p.size();++i){
+            const auto& s=specs[i];const auto expected=(values.get(static_cast<Param>(i))-s.low)/(s.high-s.low);
+            require(std::abs(p[i]->getValue()-expected)<1e-4f,"restored host value");
+        }
+    }
+};
+std::vector<float> fixture(){
+    std::vector<float> src(2*frames);
+    for(int i=0;i<rate;++i){
+        const double t=double(i)/rate,env=.15+.85*std::pow(std::sin(2*std::numbers::pi*3.1*t),2);
+        double x=0,y=0;
+        for(int k=1;k<=12;++k){const auto phase=2*std::numbers::pi*(137.3*k)*t+std::sin(2*std::numbers::pi*4.3*t);x+=.09/k*std::sin(phase);y+=.07/k*std::sin(phase+.17*k);}
+        src[2*std::size_t(i)]=float(env*x);src[2*std::size_t(i)+1]=float(env*y);
+    }
+    return src;
+}
+std::vector<float> aligned(const std::vector<float>& src,int latency){
+    require(latency>=0&&2*std::size_t(latency)<src.size(),"valid measured latency");
+    std::vector<float> out(src.size());std::copy_n(src.begin(),src.size()-2*std::size_t(latency),out.begin()+2*std::size_t(latency));return out;
+}
+template<class Edit>
+std::vector<float> render(juce::AudioPluginInstance& p,const std::vector<float>& source,int partition,bool offline,Edit edit){
+    p.setNonRealtime(offline);p.setRateAndBufferSizeDetails(rate,512);p.prepareToPlay(rate,512);
+    juce::MidiBuffer midi;std::vector<float> output(source.size());juce::AudioBuffer<float> audio(2,512);
+    for(int offset=0;offset<int(source.size()/2);){
+        // Keep the 0.5s control boundary exact for every block partition.
+        const int boundary=offset<24000?24000:int(source.size()/2);
+        const int n=std::min({partition,boundary-offset,int(source.size()/2)-offset});
+        audio.setSize(2,n,false,false,true);
+        edit(offset);
+        for(int i=0;i<n;++i){audio.setSample(0,i,source[2*std::size_t(offset+i)]);audio.setSample(1,i,source[2*std::size_t(offset+i)+1]);}
+        p.processBlock(audio,midi);
+        for(int i=0;i<n;++i){output[2*std::size_t(offset+i)]=audio.getSample(0,i);output[2*std::size_t(offset+i)+1]=audio.getSample(1,i);}
+        offset+=n;
+    }
+    p.releaseResources();return output;
+}
+template<class Create>
+int run(Create create){
+    auto a=create(rate,512),b=create(rate,512);
+    Controls ca(*a),cb(*b);const auto src=fixture();
+    auto noop=[](int){};
+    ca.apply(Parameters{});const auto neutral=render(*a,src,127,false,noop);
+    // Independently calculated latency from fixed 48k studio design: FFT 2048+512, swell 7680.
+    const auto dry=aligned(src,10240);require(compare(neutral,dry).maxError==0,"actual loaded module exact dry oracle");
+    std::ofstream csv("CYBERATOR-product-cases.csv");require(bool(csv),"case report");csv<<std::setprecision(10);
+    csv<<"kind,index,name,peak,energy,shape,recall_max_error,recall_relative_error,status\n";
+    std::vector<std::vector<float>> prior;
+    for(std::size_t i=0;i<factoryBank.size();++i){
+        const auto& preset=factoryBank[i];const auto values=preset.parameters();
+        ca.apply(values);juce::MemoryBlock state;a->getStateInformation(state);require(state.getSize()>0,"nonempty actual host state");
+        const auto x=render(*a,src,127,false,noop);
+        b->setStateInformation(state.getData(),int(state.getSize()));cb.verify(values);
+        const auto y=render(*b,src,512,true,noop);
+        const auto effect=compare(x,dry),recall=compare(y,x);
+        const bool pass=audibleChange(effect)&&effect.maxPeak<1&&recallMatches(recall);
+        csv<<"preset,"<<i<<','<<preset.name<<','<<effect.maxPeak<<','<<effect.energy<<','<<effect.shapeError<<','<<recall.maxError<<','<<recall.relativeError<<','<<(pass?"PASS":"FAIL")<<'\n';csv.flush();
+        if(!pass)std::cerr<<"Preset "<<preset.name<<": shape "<<effect.shapeError<<", peak "<<effect.maxPeak<<", recall "<<recall.maxError<<" / "<<recall.relativeError<<'\n';
+        require(pass,"preset actual PCM, gain-independent effect, state recall, partition and offline equivalence");
+        // Compare every preset to all earlier presets without retaining 120 full two-second stereo renders.
+        std::vector<float> sampled;sampled.reserve(x.size()/16);
+        for(std::size_t j=0;j<x.size();j+=32){sampled.push_back(x[j]);sampled.push_back(x[j+1]);}
+        for(const auto& old:prior)require(audibleChange(compare(sampled,old)),"level-independent preset distinction");
+        prior.push_back(std::move(sampled));
+        if(i%20==19)std::cout<<"Actual VST3 presets "<<i+1<<" / "<<factoryBank.size()<<'\n';
+    }
+    // Context for every individual control. No global preset change between A and B.
+    Parameters base;
+    auto set=[&](Param id,float x){require(base.set(id,x),"base fixture");};
+    set(Param::granular,.7f);set(Param::size,35);set(Param::density,.7f);set(Param::position,.2f);set(Param::scatter,.2f);set(Param::pitch,3);set(Param::reverse,.25f);set(Param::feedback,.3f);set(Param::spread,.3f);
+    set(Param::formant,3);set(Param::android,.3f);set(Param::spectral,.3f);set(Param::harmony,.3f);set(Param::ghost,.3f);set(Param::swell,.3f);set(Param::delay,.3f);set(Param::space,.3f);set(Param::motion,.2f);set(Param::mix,.7f);set(Param::output,-6);
+    ca.apply(base);const auto baseline=render(*a,src,127,false,noop);
+    for(std::size_t i=0;i<specs.size();++i){
+        const auto id=static_cast<Param>(i);const auto& s=specs[i];
+        const float target=id==Param::mode?9.f:s.high;
+        ca.apply(base);
+        const auto x=render(*a,src,127,false,[&](int offset){if(offset==24000)ca.set(id,target);});
+        const auto m=compare(x,baseline);
+        // Output is intentionally a gain control; other controls may make a small
+        // change in this combined context, so use normalized waveform error here.
+        const bool pass=m.energy>1e-6&&m.maxError>1e-5&&m.relativeError>1e-4;
+        csv<<"control,"<<i<<','<<s.id<<','<<m.maxPeak<<','<<m.energy<<','<<m.shapeError<<','<<m.maxError<<','<<m.relativeError<<','<<(pass?"PASS":"FAIL")<<'\n';csv.flush();
+        if(!pass)std::cerr<<"Control "<<s.id<<" delta "<<m.maxError<<" / "<<m.relativeError<<'\n';
+        require(pass,"each host parameter changes actual processed PCM in active context");
+    }
+    std::cout<<"120 actual VST3 preset renders and recalls, 23 individual control changes PASS\n";
+    return 0;
+}
+} // namespace productCases
+
 int main(int argc,char** argv) {
     require(argc==2||argc==3,"module path argument");
     juce::ScopedJuceInitialiser_GUI init;
@@ -201,6 +318,7 @@ int main(int argc,char** argv) {
         require(p!=nullptr,"load actual VST3");
         return p;
     };
+    if(argc==3&&std::string_view(argv[2])=="product")return productCases::run(create);
     if(argc==3&&std::string_view(argv[2])=="rt")return runRealtime(create);
     if(argc==3&&std::string_view(argv[2])=="rt-parallel")return runRealtime(create,true);
     if(argc==3){

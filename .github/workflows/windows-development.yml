@@ -10,7 +10,7 @@ jobs:
   windows:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[windows-build]')
     runs-on: windows-2022
-    timeout-minutes: 35
+    timeout-minutes: 40
     outputs:
       module_sha: ${{ steps.module.outputs.sha }}
       artifact_id: ${{ steps.bundle.outputs.artifact-id }}
@@ -27,7 +27,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: CYBERATOR-editor-evidence
-          path: build/CYBERATOR-editor-*.png
+          path: |
+            build/CYBERATOR-editor-*.png
+            build/CYBERATOR-product-cases.csv
           if-no-files-found: warn
           retention-days: 3
       - name: Verify development bundle
