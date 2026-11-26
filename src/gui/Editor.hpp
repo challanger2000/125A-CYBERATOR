@@ -3,6 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "CyberAssets.h"
 #include "gui/PanelLayout.hpp"
+#include "gui/KnobCrop.hpp"
 #include "gui/SignalCapture.hpp"
 #include "control/FactoryBank.hpp"
 #include "control/SessionState.hpp"
@@ -47,12 +48,10 @@ public:
     void drawRotarySlider(Graphics& g,int x,int y,int w,int h,float pos,float,float,Slider& slider)override{
         const auto f=slider.getProperties()["family"].toString();
         const int family=f=="s"?0:f=="m"?1:2;
-        const int nominal=std::array<int,3>{64,96,128}[static_cast<std::size_t>(family)];
         const int maxDiameter=std::array<int,3>{64,88,104}[static_cast<std::size_t>(family)];
         const float scale=Component::getApproximateScaleFactorForComponent(&slider);
-        constexpr std::array<int,4> resolutions{100,150,200,300};
-        int selected=300;
-        for(int s:resolutions)if(float(nominal*s)/100.f>=float(maxDiameter)*scale){selected=s;break;}
+        const auto& crop=chooseCrop(static_cast<std::size_t>(family),float(maxDiameter)*scale);
+        const int selected=crop.resolution;
         auto& cache=cache_[static_cast<std::size_t>(family)];
         if(cache.scale!=selected){
             cache.scale=selected;cache.strip={};
@@ -60,7 +59,7 @@ public:
             int size=0;
             if(const auto* data=asset(resource,size)){
                 auto decoded=ImageFileFormat::loadFrom(data,static_cast<std::size_t>(size));
-                const int expected=nominal*selected/100;
+                const int expected=crop.frame;
                 if(decoded.isValid()&&decoded.getWidth()==expected&&decoded.getHeight()==expected*128)
                     cache.strip=std::move(decoded);
             }
@@ -70,9 +69,8 @@ public:
         }
         const int d=std::min({w,h,static_cast<int>(slider.getProperties()["diameter"])});
         const int frame=std::clamp(roundToInt(std::clamp(pos,0.f,1.f)*127),0,127);
-        const int px=cache.strip.getWidth();
         g.setImageResamplingQuality(Graphics::highResamplingQuality);
-        g.drawImage(cache.strip,x+(w-d)/2,y+(h-d)/2,d,d,0,frame*px,px,px,false);
+        g.drawImage(cache.strip,x+(w-d)/2,y+(h-d)/2,d,d,crop.x,frame*crop.frame+crop.y,crop.size,crop.size,false);
     }
     [[nodiscard]] bool artworkReady()const noexcept{for(const auto& c:cache_)if(!c.strip.isValid())return false;return true;}
 private:
@@ -89,17 +87,19 @@ public:
             serial_=next.serial;data_=next;last_=now;valid_=true;analyse();repaint();
         }else if(valid_&&now-last_>550){valid_=false;repaint();}
     }
+    [[nodiscard]] bool hasFrame()const noexcept{return valid_;}
+    [[nodiscard]] const SignalCapture::Snapshot& latestFrame()const noexcept{return data_;}
     void paint(Graphics& g)override{
         const auto bounds=getLocalBounds().toFloat();g.setColour(screen);g.fillRoundedRectangle(bounds,5);
         g.setColour(edge);g.drawRoundedRectangle(bounds.reduced(.5f),5,1);
         g.setFont(FontOptions(11.f));g.setColour(muted);
-        g.drawText("ALIGNED DRY / OUTPUT  ·  LEFT",12,7,getWidth()-24,16,Justification::centredLeft);
+        g.drawText("ALIGNED DRY / OUTPUT  /  LEFT",12,7,getWidth()-24,16,Justification::centredLeft);
         const Rectangle<float> wave{12,31,float(getWidth()-24),120};
         const Rectangle<float> spec{12,181,float(getWidth()-24),73};
         g.setColour(edge.withAlpha(.65f));
         for(int i=0;i<=4;++i)g.drawHorizontalLine(roundToInt(wave.getY()+wave.getHeight()*float(i)/4),wave.getX(),wave.getRight());
         for(int i=0;i<=3;++i)g.drawHorizontalLine(roundToInt(spec.getY()+spec.getHeight()*float(i)/3),spec.getX(),spec.getRight());
-        g.setColour(muted);g.drawText("OUTPUT SPECTRUM  ·  dBFS",12,160,getWidth()-24,16,Justification::centredLeft);
+        g.setColour(muted);g.drawText("OUTPUT SPECTRUM  /  dBFS",12,160,getWidth()-24,16,Justification::centredLeft);
         if(valid_){
             trace(g,wave,data_.dry,muted.withAlpha(.65f));trace(g,wave,data_.wet,cyan);
             const float bw=spec.getWidth()/float(bands_.size());
@@ -114,7 +114,7 @@ public:
         }
         auto metric=[&](int x,int w,const String& name,const String& value,Colour colour){
             g.setColour(muted);g.setFont(FontOptions(10.f));g.drawText(name,x,274,w,13,Justification::centredLeft);
-            g.setColour(colour);g.setFont(FontOptions(13.f));g.drawText(valid_?value:String("—"),x,288,w,17,Justification::centredLeft);
+            g.setColour(colour);g.setFont(FontOptions(13.f));g.drawText(valid_?value:String("-"),x,288,w,17,Justification::centredLeft);
         };
         metric(12,72,"GRAINS",String(static_cast<int64>(data_.grains)),cyan);
         metric(84,91,"ECHO PRE-MIX",db(data_.echoPeak),violet);
@@ -204,19 +204,19 @@ public:
         g.setColour(edge);g.drawHorizontalLine(89,0,float(panel::width));
         if(logo_)logo_->drawWithin(g,rect(panel::logo).toFloat(),RectanglePlacement::centred,1);
         else{g.setColour(Colours::orange);g.drawText("LOGO ERROR",rect(panel::logo),Justification::centred);}
-        g.setColour(text);g.setFont(FontOptions(29.f,Font::bold));g.drawText("CYBERATOR",158,17,530,35,Justification::centredLeft);
+        g.setColour(text);g.setFont(FontOptions(31.f,Font::bold));g.drawText("CYBERATOR",158,17,530,35,Justification::centredLeft);
         g.setColour(muted);g.setFont(FontOptions(12.f));g.drawText("GRANULAR  /  SPECTRAL  /  REVERSE FX",160,52,540,18,Justification::centredLeft);
         paintPanel(g,panel::granular,"01 / GRANULAR",cyan);paintPanel(g,panel::signal,"SIGNAL / ANALYSIS",cyan);
         paintPanel(g,panel::cybernetic,"02 / CYBERNETIC",cyan);paintPanel(g,panel::ghost,"03 / GHOST",violet);
         paintPanel(g,panel::space,"04 / SPACE",violet);paintPanel(g,panel::global,"MASTER",text);
-        g.setFont(FontOptions(12.f));g.setColour(text);
+        g.setFont(FontOptions(13.f));g.setColour(text);
         for(const auto& k:panel::knobs)g.drawText(k.name,k.bounds.x,k.bounds.y,k.bounds.w,18,Justification::centred);
     }
 private:
     static void paintPanel(Graphics& g,panel::Rect area,const String& title,Colour accent){
         const auto r=rect(area).toFloat();g.setColour(inset);g.fillRoundedRectangle(r,8);g.setColour(edge);g.drawRoundedRectangle(r.reduced(.5f),8,1);
         g.drawHorizontalLine(area.y+35,float(area.x+12),float(area.x+area.w-12));
-        g.setColour(accent);g.setFont(FontOptions(14.f,Font::bold));g.drawText(title,area.x+16,area.y+5,area.w-32,26,Justification::centredLeft);
+        g.setColour(accent);g.setFont(FontOptions(15.f,Font::bold));g.drawText(title,area.x+16,area.y+5,area.w-32,26,Justification::centredLeft);
     }
     int matchingPreset()const{
         std::array<float,Parameters::count> current{};

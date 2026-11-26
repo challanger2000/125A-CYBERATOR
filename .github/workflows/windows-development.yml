@@ -35,6 +35,6 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: CYBERATOR-development-not-release
-          path: build/Cyberator_artefacts/Release/VST3/
+          path: build/Cyberator_artefacts/Release/VST3/*.vst3/
           if-no-files-found: error
           retention-days: 3

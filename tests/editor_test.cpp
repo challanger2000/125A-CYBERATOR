@@ -67,5 +67,26 @@ int main(){
         stream->setPosition(0);stream->truncate();juce::PNGImageFormat png;
         require(png.writeImageToStream(image,*stream),"scaled screenshot encoded");
     }
+    ed->setSize(1200,730);
+    p->setRateAndBufferSizeDetails(48000,128);p->prepareToPlay(48000,128);
+    juce::MidiBuffer midi;
+    std::array<float,SignalCapture::frames> actual{};
+    for(int offset=0;offset<32768;offset+=128){
+        juce::AudioBuffer<float> audio(2,128);
+        for(int i=0;i<128;++i){const float x=float(.25*std::sin(2*std::numbers::pi*220*(offset+i)/48000.));audio.setSample(0,i,x);audio.setSample(1,i,.5f*x);}
+        p->processBlock(audio,midi);
+        if(offset>=32768-int(actual.size()))for(int i=0;i<128;++i)actual[std::size_t(offset-(32768-int(actual.size()))+i)]=audio.getSample(0,i);
+    }
+    auto* display=dynamic_cast<ui::SignalDisplay*>(find(*ed,"signal-display"));
+    require(display!=nullptr,"real signal display");
+    display->update();
+    require(display->hasFrame()&&display->latestFrame().sampleRate==48000,"display receives actual audio frame");
+    require(display->latestFrame().wet==actual,"display waveform equals processor output");
+    auto activeImage=ed->createComponentSnapshot(ed->getLocalBounds(),true);
+    auto dest=juce::File::getCurrentWorkingDirectory().getChildFile("CYBERATOR-editor-active.png");
+    auto stream=dest.createOutputStream();require(stream!=nullptr,"active screenshot output");
+    stream->setPosition(0);stream->truncate();juce::PNGImageFormat png;
+    require(png.writeImageToStream(activeImage,*stream),"active screenshot encoded");
+    p->releaseResources();
     std::cout<<"Direct native editor smoke PASS\n";
 }
