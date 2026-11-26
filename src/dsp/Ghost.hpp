@@ -8,9 +8,9 @@ struct GhostFrame { StereoFrame dry{}, echo{}, swell{}; };
 class Ghost final {
 public:
     static constexpr std::size_t tapCount=96;
-    void prepare(double sr) {
+    void prepare(double sr, bool shortLookahead=false) {
         if (!std::isfinite(sr)||sr<8000||sr>192000) throw std::invalid_argument("sample rate");
-        const auto latency=std::size_t(std::round(sr*.160));
+        const auto latency=std::size_t(std::round(sr*(shortLookahead ? .020 : .160)));
         const auto window=2*std::size_t(std::round(sr*.090));
         History h; h.prepare(latency+4*window+2);
         std::vector<double> w(window);

@@ -10,9 +10,9 @@ struct CyberParams { double formant{}, android{}, spectral{}; };
 class Cybernetic final {
     using C=std::complex<double>;
 public:
-    void prepare(double sr) {
+    void prepare(double sr, bool shortWindow=false) {
         if(!std::isfinite(sr)||sr<8000||sr>192000) throw std::invalid_argument("sample rate");
-        std::size_t n=256; while(double(n)*std::sqrt(2.0)<sr*.04266666666666667) n*=2;
+        std::size_t n=shortWindow?128:256; while(double(n)*std::sqrt(2.0)<sr*(shortWindow?.01066666666666667:.04266666666666667)) n*=2;
         Cybernetic fresh; fresh.n_=n; fresh.hop_=n/4;
         fresh.radius_=std::max(std::size_t(1),std::size_t(std::round(350*double(n)/sr)));
         fresh.window_.resize(n); fresh.twiddle_.resize(n/2); fresh.rev_.resize(n);
