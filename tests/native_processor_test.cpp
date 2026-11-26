@@ -7,6 +7,8 @@
 #include <iostream>
 #include <memory>
 #include <new>
+#include <thread>
+#include <atomic>
 #include "support/AllocationProbe.hpp"
 
 void require(bool ok,const char* msg){if(!ok){std::cerr<<msg<<'\n';std::exit(1);}}
@@ -70,10 +72,83 @@ int allocationCases(juce::AudioProcessor& p){
     std::cout<<callbacks<<" processor callbacks with C++ allocation interposition PASS\n";return 0;
 }
 
+
+bool matchesSession(const juce::MemoryBlock& block,const cyberator::SessionState& expected){
+    cyberator::SessionState s;
+    if(!s.restore(std::span(static_cast<const std::uint8_t*>(block.getData()),block.getSize())))return false;
+    if(std::abs(s.scale-expected.scale)>1e-6f)return false;
+    for(std::size_t i=0;i<cyberator::Parameters::count;++i){
+        const auto id=static_cast<cyberator::Param>(i);
+        if(std::abs(s.parameters.get(id)-expected.parameters.get(id))>1e-5f*(cyberator::specs[i].high-cyberator::specs[i].low))return false;
+    }
+    return true;
+}
+int stateTransactionCases(juce::AudioProcessor& p){
+    using namespace cyberator;
+    SessionState a,b;a.scale=.7f;b.scale=1.3f;
+    // Keep an exact dry PCM oracle while every other parameter changes.
+    for(std::size_t i=0;i<specs.size();++i){
+        const auto id=static_cast<Param>(i);
+        require(a.parameters.set(id,specs[i].low)&&b.parameters.set(id,specs[i].high),"session fixtures");
+    }
+    require(a.parameters.set(Param::mix,0)&&b.parameters.set(Param::mix,0),"aligned dry oracle");
+    require(a.parameters.set(Param::freeze,0)&&b.parameters.set(Param::freeze,0),"fresh source fixture");
+    const auto aa=a.save(),bb=b.save();
+    p.setStateInformation(aa.data(),int(aa.size()));
+    struct Listener final:juce::AudioProcessorParameter::Listener{
+        juce::AudioProcessor& p;const SessionState& a;const SessionState& b;unsigned calls{};
+        Listener(juce::AudioProcessor& processor,const SessionState& first,const SessionState& second):p(processor),a(first),b(second){}
+        void parameterValueChanged(int,float)override{
+            juce::MemoryBlock saved;p.getStateInformation(saved);
+            require(matchesSession(saved,a)||matchesSession(saved,b),"synchronous parameter listener save is a complete session");
+            ++calls;
+        }
+        void parameterGestureChanged(int,bool)override{}
+    } listener(p,a,b);
+    auto* out=static_cast<juce::AudioProcessorParameter*>(nullptr);
+    for(auto* param:p.getParameters())if(param->getName(128)=="output")out=param;
+    require(out!=nullptr,"output listener fixture");out->addListener(&listener);
+    p.setStateInformation(bb.data(),int(bb.size()));p.setStateInformation(aa.data(),int(aa.size()));
+    require(listener.calls>=2,"reentrant host callback exercised");
+    out->removeListener(&listener);
+    p.setRateAndBufferSizeDetails(48000,128);p.prepareToPlay(48000,128);
+    const int latency=p.getLatencySamples();
+    std::atomic<bool> done{false};std::atomic<unsigned> callbacks{0},saves{0};
+    std::thread audio([&]{
+        juce::AudioBuffer<float> buffer(2,128);juce::MidiBuffer midi;int position=0;
+        do{
+            for(int i=0;i<128;++i){buffer.setSample(0,i,.125f);buffer.setSample(1,i,-.25f);}
+            p.processBlock(buffer,midi);
+            for(int i=0;i<128;++i){
+                require(buffer.getSample(0,i)==(position+i>=latency?.125f:0),"concurrent restore dry PCM left");
+                require(buffer.getSample(1,i)==(position+i>=latency?-.25f:0),"concurrent restore dry PCM right");
+            }
+            position+=128;++callbacks;
+        }while(!done.load()||position<latency+256);
+    });
+    std::thread saver([&]{
+        do{juce::MemoryBlock saved;p.getStateInformation(saved);
+            require(matchesSession(saved,a)||matchesSession(saved,b),"parallel save never emits mixed scale/parameters");
+            ++saves;
+        }while(!done.load()||saves.load()<100);
+    });
+    while(!callbacks.load()||!saves.load())std::this_thread::yield();
+    for(int i=0;i<200;++i){
+        const auto& bytes=i%2?aa:bb;p.setStateInformation(bytes.data(),int(bytes.size()));
+    }
+    done.store(true);saver.join();audio.join();
+    juce::MemoryBlock last;p.getStateInformation(last);require(matchesSession(last,a),"last complete restore");
+    require(callbacks.load()>0&&saves.load()>=100,"concurrent paths executed");
+    p.releaseResources();
+    std::cout<<"Reentrant saves "<<listener.calls<<", concurrent saves "<<saves.load()<<", audio callbacks "<<callbacks.load()<<" PASS\n";
+    return 0;
+}
+
 int main(int argc,char** argv){
     juce::ScopedJuceInitialiser_GUI init;
     std::unique_ptr<juce::AudioProcessor> p(createPluginFilter());
     require(p!=nullptr,"factory");
+    if(argc==2&&std::string_view(argv[1])=="state-transaction")return stateTransactionCases(*p);
     if(argc==2&&std::string_view(argv[1])=="allocation")return allocationCases(*p);
     require(p->getNumPrograms()==1&&p->getProgramName(0)=="Current Settings","named current host program");
     require(p->getParameters().size()==int(cyberator::Parameters::count),"parameter count");

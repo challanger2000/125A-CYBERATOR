@@ -2,6 +2,7 @@
 #include "control/ParameterRamp.hpp"
 #include "control/SessionState.hpp"
 #include "control/TailPolicy.hpp"
+#include "control/StatePublication.hpp"
 #include "gui/Editor.hpp"
 #include <atomic>
 #include <memory>
@@ -38,13 +39,13 @@ public:
     bool producesMidi()const override{return false;}
     bool isMidiEffect()const override{return false;}
     double getTailLengthSeconds()const override{
-        const auto generation=generation_.load();
+        const auto generation=publication_.generation();
         const auto* freeze=raw_[static_cast<std::size_t>(Param::freeze)];
         const auto* feedback=raw_[static_cast<std::size_t>(Param::feedback)];
         if((generation&1u)||!freeze||!feedback)return std::numeric_limits<double>::infinity();
         const bool frozen=freeze->load()>.5f;
         const double fb=feedback->load();
-        if(generation!=generation_.load())return std::numeric_limits<double>::infinity();
+        if(generation!=publication_.generation())return std::numeric_limits<double>::infinity();
         return tailSeconds(frozen,fb);
     }
     int getNumPrograms()override{return 1;}
@@ -70,15 +71,16 @@ public:
     void processBlock(juce::AudioBuffer<float>& b,juce::MidiBuffer& m)override{render(b,m,false);}
     void processBlockBypassed(juce::AudioBuffer<float>& b,juce::MidiBuffer& m)override{render(b,m,true);}
     void getStateInformation(juce::MemoryBlock& dest)override {
-        const auto tree=state_.copyState();SessionState session;auto& p=session.parameters;
-        for(std::size_t i=0;i<specs.size();++i){
-            const auto child=tree.getChildWithProperty("id",idString(specs[i].id));
-            if(!child.isValid()||!child.hasProperty("value")||
-               !p.set(static_cast<Param>(i),static_cast<float>(child.getProperty("value")))){
-                dest.reset();return;
+        const auto bytes=publication_.save([&]()->std::optional<SessionState::Bytes>{
+            const auto tree=state_.copyState();SessionState session;auto& p=session.parameters;
+            for(std::size_t i=0;i<specs.size();++i){
+                const auto child=tree.getChildWithProperty("id",idString(specs[i].id));
+                if(!child.isValid()||!child.hasProperty("value")||
+                   !p.set(static_cast<Param>(i),static_cast<float>(child.getProperty("value"))))return std::nullopt;
             }
-        }
-        session.scale=uiScale_.load();const auto bytes=session.save();dest.replaceAll(bytes.data(),bytes.size());
+            session.scale=uiScale_.load();return session.save();
+        });
+        if(bytes)dest.replaceAll(bytes->data(),bytes->size());else dest.reset();
     }
     void setStateInformation(const void* data,int size)override {
         if(data==nullptr||size<=0)return;
@@ -96,8 +98,9 @@ private:
             if(!child.isValid())return false;
             child.setProperty("value",p.get(static_cast<Param>(i)),nullptr);
         }
-        generation_.fetch_add(1);
-        struct Generation {std::atomic<unsigned>& g;~Generation(){g.fetch_add(1);}} generation{generation_};
+        SessionState target;target.parameters=p;target.scale=scale?*scale:uiScale_.load();
+        publication_.begin(target.save());
+        struct Generation {StatePublication<SessionState::Bytes>& p;~Generation(){p.end();}} generation{publication_};
         state_.replaceState(tree);if(scale)uiScale_.store(*scale);return true;
     }
 
@@ -107,12 +110,12 @@ private:
         const auto channels=std::min(getTotalNumInputChannels(),b.getNumChannels());
         for(int c=channels;c<b.getNumChannels();++c)b.clear(c,0,b.getNumSamples());
         if(!prepared_||channels<=0||b.getNumSamples()==0)return;
-        const auto begin=generation_.load();
+        const auto begin=publication_.generation();
         if((begin&1u)==0u){
             Parameters candidate=active_;
             for(std::size_t i=0;i<raw_.size();++i)
                 if(raw_[i]!=nullptr)(void)candidate.set(static_cast<Param>(i),raw_[i]->load());
-            if(begin==generation_.load())active_=candidate;
+            if(begin==publication_.generation())active_=candidate;
         }
         double bpm=120.;TransportSample transport{};
         if(auto* playhead=getPlayHead())if(auto pos=playhead->getPosition())if(auto tempo=pos->getBpm()){
@@ -135,7 +138,7 @@ private:
     }
     juce::AudioProcessorValueTreeState state_;
     std::array<std::atomic<float>*,Parameters::count> raw_{};
-    std::atomic<unsigned> generation_{0};
+    StatePublication<SessionState::Bytes> publication_;
     std::atomic_flag restoring_=ATOMIC_FLAG_INIT;
     Parameters active_;ParameterRamp ramp_;Engine engine_;SignalCapture capture_;std::atomic<float> uiScale_{SessionState::defaultScale};double sampleRate_{48000};bool prepared_{};
 };
