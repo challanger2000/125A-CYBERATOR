@@ -9,7 +9,7 @@ struct CyberParams { double formant{}, android{}, spectral{}; };
 // Each job runs in bounded microbatches over the next hop; no frame-sized callback burst.
 // Same spectral gain and phase rotation on both channels preserve per-bin stereo phase.
 class Cybernetic final {
-    enum class Stage { idle, analysis, forward, unpack, envelope, bins, reorder, inverse, synthesis };
+    enum class Stage { idle, analysis, forward, unpack, envelope, bins, reorder, inverse, synthesis, neutralSynthesis };
     using C=std::complex<double>;
 public:
     void prepare(double sr, bool shortWindow=false) {
@@ -57,7 +57,7 @@ private:
     [[nodiscard]] std::size_t wrap(std::size_t x)const noexcept{return x>=ring_?x-ring_:x;}
     void begin(const CyberParams& p)noexcept{
         start_=wrap(pos_+hop_);frameJob_=frame_;f_=bounded(p.formant,-12,12);a_=bounded(p.android,0,1);s_=bounded(p.spectral,0,1);
-        ratio_=std::exp2(f_/12);decay_=.97*s_;prefix_[0]=0;
+        ratio_=std::exp2(f_/12);decay_=.97*s_;prefix_[0]=0;neutral_=f_==0&&a_==0&&s_==0;
         zeroL_=zeroR_=same_=anti_=outZeroL_=outZeroR_=outSame_=outAnti_=true;
         stage_=Stage::analysis;index_=0;len_=2;
     }
@@ -82,8 +82,9 @@ private:
                 const auto end=take(half+1,3);
                 for(;index_<end;++index_){const auto k=index_;const auto z=packed_[k],mirror=std::conj(packed_[(n_-k)%n_]);const auto sum=(z+mirror)*.5,diff=(z-mirror)*.5;
                     fft_[0][k]=zeroL_?C{}:sum;fft_[1][k]=zeroR_?C{}:same_?fft_[0][k]:anti_?-fft_[0][k]:C{diff.imag(),-diff.real()};
+                    if(neutral_){memory_[0][k]=fft_[0][k];memory_[1][k]=fft_[1][k];}
                     if(f_!=0)prefix_[k+1]=prefix_[k]+(.5*std::log(std::max(1e-24,std::norm(fft_[0][k])+std::norm(fft_[1][k]))));}
-                if(index_==half+1){index_=0;stage_=f_!=0?Stage::envelope:Stage::bins;}break;
+                if(index_==half+1){index_=0;stage_=neutral_?Stage::neutralSynthesis:f_!=0?Stage::envelope:Stage::bins;}break;
             }
             case Stage::envelope:{
                 const auto end=take(half+1,1);
@@ -101,6 +102,14 @@ private:
             case Stage::synthesis:{
                 const auto end=take(n_,2);
                 for(;index_<end;++index_){auto& x=out_[wrap(start_+index_)];const auto w=.5*window_[index_];const auto z=packed_[index_]/double(n_);const double l=outZeroL_?0:z.real();const double r=outZeroR_?0:outSame_?l:outAnti_?-l:z.imag();x.left=finiteSample(double(x.left)+w*l);x.right=finiteSample(double(x.right)+w*r);}
+                if(index_==n_){index_=0;stage_=Stage::idle;}break;
+            }
+            case Stage::neutralSynthesis:{
+                // With identity spectral processing, inverse(FFT(window*input)) is
+                // window*input. Keep the forward spectrum for immediate activation.
+                // The input frame remains immutable throughout this hop.
+                const auto end=take(n_,2);
+                for(;index_<end;++index_){const auto i=wrap(start_+index_);auto& x=out_[i];const auto v=in_[i];const double w=window_[index_],gain=.5*w*w;x.left=finiteSample(double(x.left)+gain*v.left);x.right=finiteSample(double(x.right)+gain*v.right);}
                 if(index_==n_){index_=0;stage_=Stage::idle;}break;
             }
             case Stage::idle:break;
@@ -125,7 +134,7 @@ private:
     }
     std::size_t n_{},hop_{},ring_{},quota_{},radius_{},pos_{},count_{},frame_{},start_{},frameJob_{},index_{},len_{},late_{};
     double f_{},a_{},s_{},ratio_{},decay_{};Stage stage_{Stage::idle};
-    bool zeroL_{},zeroR_{},same_{},anti_{},outZeroL_{},outZeroR_{},outSame_{},outAnti_{};
+    bool neutral_{},zeroL_{},zeroR_{},same_{},anti_{},outZeroL_{},outZeroR_{},outSame_{},outAnti_{};
     std::array<C,4> phaseStep_{};
     std::vector<double> window_,env_,prefix_;std::vector<C> twiddle_,packed_;std::vector<std::size_t> rev_;
     std::vector<StereoFrame> in_,out_;std::array<std::vector<C>,2> fft_,memory_;

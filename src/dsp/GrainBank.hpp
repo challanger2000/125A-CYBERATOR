@@ -10,6 +10,7 @@
 #include <utility>
 #include <cstring>
 #include <cstdint>
+#include <bit>
 #if defined(__x86_64__) || defined(_M_X64)
 #include <emmintrin.h>
 #endif
@@ -106,7 +107,7 @@ public:
         SincReader reader; reader.prepare();
         history_ = std::move(history); reader_ = std::move(reader); reset();
     }
-    void reset() noexcept { history_.reset(); voices_ = {}; }
+    void reset() noexcept { history_.reset(); voices_ = {}; activeMask_=0; }
     [[nodiscard]] bool trigger(double age, double rate, std::size_t length, double pan = 0.0) noexcept {
         const int band = SincReader::bandFor(rate);
         if (band < 0 || std::abs(rate) < 0.25 || !std::isfinite(age) || !std::isfinite(pan) || length < 3 ||
@@ -117,33 +118,42 @@ public:
         const double hi = age + 1 + std::max(0.0, (1-rate)*span);
         if (lo < SincReader::before || history_.valid() <= std::size_t(SincReader::after) ||
             hi >= double(history_.valid() - SincReader::after)) return false;
-        for (auto& v : voices_) if (v.length == 0) {
+        if(activeMask_ != std::numeric_limits<std::uint32_t>::max()) {
+            const auto j=static_cast<std::size_t>(std::countr_zero(~activeMask_));auto& v=voices_[j];
             pan = std::clamp(pan, -1.0, 1.0);
-            v = {age, rate, length, 0, band, 1.0-std::max(0.0,pan), 1.0+std::min(0.0,pan),std::floor(rate)==rate}; return true;
+            v = {age, rate, length, 0, band, 1.0-std::max(0.0,pan), 1.0+std::min(0.0,pan),std::floor(rate)==rate};
+            const double theta=std::numbers::pi/double(length-1);
+            v.sinStep=std::sin(theta);v.cosStep=std::cos(theta);v.cosPhase=1;v.sinPhase=0;
+            activeMask_|=std::uint32_t(1)<<j;return true;
         }
         return false;
     }
     [[nodiscard]] StereoFrame process(StereoFrame input, bool freeze) noexcept {
         history_.capture(input, freeze);
         double l=0, r=0, weight=0;
-        for (std::size_t j=0;j<voices_.size();++j) if (auto& v=voices_[j];v.length != 0) {
+        for(auto mask=activeMask_;mask;mask&=mask-1){
+            const auto j=static_cast<std::size_t>(std::countr_zero(mask));auto& v=voices_[j];
             if (!freeze) v.age += 1;
-            const double s = std::sin(std::numbers::pi * double(v.position) / double(v.length-1));
+            const double s = v.sinPhase;
             const double w = (v.position == 0 || v.position == v.length-1) ? 0.0 : s*s;
             const auto frame = reader_.read(history_, v.age, v.band, v.integerRate?&caches_[j]:nullptr);
             l += w*frame.left*v.leftGain; r += w*frame.right*v.rightGain; weight += w;
             v.age -= v.rate;
-            if (++v.position == v.length) v = {};
+            if (++v.position == v.length) {v = {};activeMask_&=~(std::uint32_t(1)<<j);}
+            else if((v.position&255u)==0){const double theta=std::numbers::pi*double(v.position)/double(v.length-1);v.sinPhase=std::sin(theta);v.cosPhase=std::cos(theta);}
+            else{const double next=v.sinPhase*v.cosStep+v.cosPhase*v.sinStep;v.cosPhase=v.cosPhase*v.cosStep-v.sinPhase*v.sinStep;v.sinPhase=next;}
         }
         const double norm = std::max(1.0, weight);
         return {finiteSample(l/norm), finiteSample(r/norm)};
     }
     [[nodiscard]] std::size_t captured() const noexcept { return history_.valid(); }
     [[nodiscard]] std::size_t active() const noexcept {
-        std::size_t n=0; for (const auto& v : voices_) if (v.length) ++n; return n;
+        return static_cast<std::size_t>(std::popcount(activeMask_));
     }
 private:
-    struct Voice { double age{}, rate{}; std::size_t length{}, position{}; int band{}; double leftGain{}, rightGain{}; bool integerRate{}; };
+    struct Voice { double age{}, rate{}; std::size_t length{}, position{}; int band{}; double leftGain{}, rightGain{}; bool integerRate{}; double sinStep{},cosStep{},sinPhase{},cosPhase{}; };
+    static_assert(maxGrains==32);
+    std::uint32_t activeMask_{};
     History history_;
     SincReader reader_;
     std::array<Voice,maxGrains> voices_{};

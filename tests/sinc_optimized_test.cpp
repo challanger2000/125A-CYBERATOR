@@ -39,8 +39,11 @@ int main(){
         for(int i=0;i<16000;++i){float l=noise(rng),r=noise(rng);same(a.process({l,r},false),b.process({l,r},false));}
         for(int j=0;j<32;++j){const double age=8000+j*.124987;require(a.trigger(age,rate,1000,.2)==b.trigger(age,rate,1000,.2),"admission equal");}
         require(a.active()==32&&b.active()==32,"maximum polyphony exercised");
-        for(int i=0;i<1500;++i){float l=noise(rng),r=noise(rng);same(a.process({l,r},i%17==0),b.process({l,r},i%17==0));}
+        for(int i=0;i<1500;++i){float l=noise(rng),r=noise(rng);const auto x=a.process({l,r},i%17==0);const auto y=b.process({l,r},i%17==0);
+            // P027 recurs the Hann window in double precision. The individual sinc
+            // reader comparisons above remain exact; this graph allows float rounding.
+            require(std::abs(double(x.left)-y.left)<=2e-7&&std::abs(double(x.right)-y.right)<=2e-7,"voice PCM equivalent with recurrent Hann");}
         require(a.active()==0&&b.active()==0,"voice retirement equal");
     }
-    std::cout<<"Mirrored history and SIMD/cache interpolation match original scalar PCM\n";
+    std::cout<<"Mirrored history and interpolation exact; complete voice PCM within float rounding\n";
 }
