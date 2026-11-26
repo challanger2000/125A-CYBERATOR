@@ -8,6 +8,11 @@
 #include <limits>
 #include <vector>
 #include <utility>
+#include <cstring>
+#include <cstdint>
+#if defined(__x86_64__) || defined(_M_X64)
+#include <emmintrin.h>
+#endif
 
 namespace cyberator {
 inline float finiteSample(double value) noexcept {
@@ -44,7 +49,8 @@ public:
         if (!std::isfinite(rate) || std::abs(rate) > 4.0) return -1;
         return std::abs(rate) <= 1.0 ? 0 : std::min(bands-1, int(std::ceil(4 * std::log2(std::abs(rate)))));
     }
-    [[nodiscard]] StereoFrame read(const History& history, double age, int band) const noexcept {
+    struct KernelCache { int band{-1},phase{-1}; double fraction{}; std::array<double,taps> weights{}; };
+    [[nodiscard]] StereoFrame read(const History& history, double age, int band, KernelCache* cache=nullptr) const noexcept {
         if (table_.empty() || band < 0 || band >= bands || !std::isfinite(age) ||
             age < before || history.valid() <= std::size_t(after) ||
             age >= double(history.valid() - after)) return {};
@@ -52,14 +58,36 @@ public:
         const double phase = (age - double(i)) * phases;
         const int p = std::min(phases-1, int(phase));
         const double f = phase - p;
+        const auto* samples = history.backwardWindow(i - before, taps);
+        if (!samples) return {};
+        const auto* a = table_.data() + index(band,p,0);
+        const auto* b = a + taps;
+        if (cache && (cache->band != band || cache->phase != p || cache->fraction != f)) {
+            cache->band=band; cache->phase=p; cache->fraction=f;
+            for (int k=0;k<taps;++k) cache->weights[std::size_t(k)] = double(a[k]) + f*(double(b[k])-double(a[k]));
+        }
+#if defined(__x86_64__) || defined(_M_X64)
+        static_assert(sizeof(StereoFrame)==sizeof(std::uint64_t));
+        __m128d sum = _mm_setzero_pd();
+        auto accumulate = [&](int k,double w){
+            std::int64_t bits;
+            std::memcpy(&bits, samples-k, sizeof(bits));
+            const auto v = _mm_cvtps_pd(_mm_castsi128_ps(_mm_cvtsi64_si128(bits)));
+            sum = _mm_add_pd(sum, _mm_mul_pd(_mm_set1_pd(w), v));
+        };
+        if(cache) for(int k=0;k<taps;++k) accumulate(k,cache->weights[std::size_t(k)]);
+        else for(int k=0;k<taps;++k) accumulate(k,double(a[k])+f*(double(b[k])-double(a[k])));
+        double out[2]; _mm_storeu_pd(out,sum);
+        return {finiteSample(out[0]), finiteSample(out[1])};
+#else
         double l = 0, r = 0;
         for (int k = 0; k < taps; ++k) {
-            const double a = table_[index(band,p,k)], b = table_[index(band,p+1,k)];
-            const auto v = history.read(i - before + std::size_t(k));
-            const double w = a + f * (b-a);
+            const double w = cache ? cache->weights[std::size_t(k)] : double(a[k]) + f * (double(b[k])-double(a[k]));
+            const auto v = samples[-k];
             l += w*v.left; r += w*v.right;
         }
         return {finiteSample(l), finiteSample(r)};
+#endif
     }
 private:
     static constexpr std::size_t index(int b, int p, int k) noexcept {
@@ -91,18 +119,18 @@ public:
             hi >= double(history_.valid() - SincReader::after)) return false;
         for (auto& v : voices_) if (v.length == 0) {
             pan = std::clamp(pan, -1.0, 1.0);
-            v = {age, rate, length, 0, band, 1.0-std::max(0.0,pan), 1.0+std::min(0.0,pan)}; return true;
+            v = {age, rate, length, 0, band, 1.0-std::max(0.0,pan), 1.0+std::min(0.0,pan),std::floor(rate)==rate}; return true;
         }
         return false;
     }
     [[nodiscard]] StereoFrame process(StereoFrame input, bool freeze) noexcept {
         history_.capture(input, freeze);
         double l=0, r=0, weight=0;
-        for (auto& v : voices_) if (v.length != 0) {
+        for (std::size_t j=0;j<voices_.size();++j) if (auto& v=voices_[j];v.length != 0) {
             if (!freeze) v.age += 1;
             const double s = std::sin(std::numbers::pi * double(v.position) / double(v.length-1));
             const double w = (v.position == 0 || v.position == v.length-1) ? 0.0 : s*s;
-            const auto frame = reader_.read(history_, v.age, v.band);
+            const auto frame = reader_.read(history_, v.age, v.band, v.integerRate?&caches_[j]:nullptr);
             l += w*frame.left*v.leftGain; r += w*frame.right*v.rightGain; weight += w;
             v.age -= v.rate;
             if (++v.position == v.length) v = {};
@@ -115,9 +143,10 @@ public:
         std::size_t n=0; for (const auto& v : voices_) if (v.length) ++n; return n;
     }
 private:
-    struct Voice { double age{}, rate{}; std::size_t length{}, position{}; int band{}; double leftGain{}, rightGain{}; };
+    struct Voice { double age{}, rate{}; std::size_t length{}, position{}; int band{}; double leftGain{}, rightGain{}; bool integerRate{}; };
     History history_;
     SincReader reader_;
     std::array<Voice,maxGrains> voices_{};
+    std::array<SincReader::KernelCache,maxGrains> caches_{};
 };
 } // namespace cyberator
