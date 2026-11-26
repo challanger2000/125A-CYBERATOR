@@ -1,7 +1,7 @@
 # 125A CYBERATOR
 **Granular · Spectral · Reverse FX — Between Human and Machine.**
 
-Status: P000 / concept baseline; no executable plugin yet. Owner approved 2026-11-25. One standalone VST3 audio effect, C++ with JUCE; Windows x64 primary, portable design, Linux proposed secondary target. No external plugin or speech generator required. Input may be recorded/synthetic speech, vocals, instruments or percussion.
+Status: P021 development VST3, 21/21 Windows CTests passed at the pinned source in STATUS.md. Independent QA and high-rate realtime qualification still open; not released. Owner approved 2026-11-25. One standalone VST3 audio effect, C++ with JUCE; Windows x64 primary, portable design, Linux proposed secondary target. No external plugin or speech generator required. Input may be recorded/synthetic speech, vocals, instruments or percussion.
 
 ## Product contract
 Four independently usable, combinable engines:
@@ -24,7 +24,7 @@ Static design first, then implementation. Premium dark hardware-style panel, res
 ## Development and acceptance
 Read [125A Engineering START-HERE](https://github.com/challanger2000/125A-Engineering/blob/main/START-HERE.md) and complete its mandatory gate before implementation. JUCE infrastructure with framework-independent DSP where practical; pin JUCE revision after official license and compatibility check. No speculative Actions runs. Use version branch after initial documentation-only repository initialization. Research reuse and compare algorithms before choosing; validate with independent positive/negative oracles, real speech/audio fixtures, block partitioning, automation, state/recall, latency/tail, sample rates, feedback stability, finite extreme input, realtime bounds and multi-instance isolation. Windows actual VST3 host, Validator and Test Lab evidence required before final DAW acceptance. No PASS without executed evidence.
 
-## Reading checkpoint — incomplete
+## Reading checkpoint — completed initial DSP/GUI scope
 Engineering immutable revision `53b10bd4a81fe6c5d62e110b932aef7155172ad6`.
 - START-HERE.md blob `91a0e14dd24ff72874bbedf58962e0e8c14c444e`: complete visible content inspected, 164 lines including trailing newline.
 - README.md blob `bd94e5a896bcc905af65ca5659e533eee854b46f`: complete visible content inspected, 74 lines including trailing newline.
@@ -41,5 +41,5 @@ Engineering immutable revision `53b10bd4a81fe6c5d62e110b932aef7155172ad6`.
 - Additional rules from lines 176–470: preserve approved observable behavior; distinguish payload/archive identity; prove UI→parameter→DSP with native interaction; positive oracles before mutant results; actual valid bus and clock context; sample-aligned tempo/cycle scheduling, signed modulo and rate-derived smoothing; coherent snapshot and transactional rollback; check platform headers and workflow syntax before CI; invalidate stale GUI gestures on successful recall.
 - Additional rules from lines 471–600: event queue saturation and host feedback, native gesture/default tests, always-active Release test assertions and negative controls, isolate test fixtures and preserve exit codes, local strict compiler preflight, prefer C++23 subject to actual JUCE/toolchain compatibility, bounded portable asset/state policy where applicable.
 - Additional rules from lines 601–3187: verify complete real host lifecycle, exact package naming and installed artifact; derive meaningful independent DSP oracles including causal source differences, level-matched mode contrasts, temporal envelopes, pitch accuracy and stereo domain; verify warm bypass, dense automation, tail versus PDC, finite arithmetic and sample-rate independence; preserve coherent state, actual per-instance ownership and RT budgets; actual GUI interactions at supported scales including close/resize/reentrancy and invalid resources; check stream result and byte count, independently valid host context fields, inactive buses, exact dependency notices, negative controls and actual artifact test reports. Guardrails complete; standards/QA/research/roadmap/branding reading next.
-- JUCE version and license eligibility: NOT VERIFIED. Official references: https://juce.com/get-juce/ and https://github.com/juce-framework/JUCE/releases. Name clearance before public product distribution remains open.
-- No implementation, build, audio test or release approval. This commit only records the already agreed product scope and reading progress.
+- JUCE 9.0.6 pinned at 654bdbc7a9db0dae90849b44abe91f339e9f0768; owner confirmed Starter eligibility/selection. Formal account/seat and continued eligibility remain owner responsibilities. Official references: https://juce.com/get-juce/ and https://github.com/juce-framework/JUCE/releases. Name clearance before public product distribution remains open.
+- The initial reading receipt above records P000, not current execution status. See STATUS.md for the actual implementation, assets, tests, open gates and exact revisions.

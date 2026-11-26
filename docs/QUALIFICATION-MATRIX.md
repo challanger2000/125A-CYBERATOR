@@ -1,0 +1,19 @@
+# P022 — qualification coverage (not a full audit)
+
+Baseline: exact P021 `d2be596e9275838cfc38bdd4a0f414c8380252ba`, verified Windows module SHA-256 `56478184e101e12d55fd1b37f6822aea68ec90bcaa591fb91029cb7e92e8d099`. Product artifact from run 45742434356 (no rebuild for independent P022).
+ 
+| Requirement | Executed evidence | Status / remaining coverage |
+|---|---|---|
+| Actual Windows x64 VST3, stereo/mono buses, exact dry PDC | P021 21/21 CTest, native processor + VST3 host smoke, exact SHA | PASS in named cases; official validator pending |
+| Granular launch, pitch, reverse, freeze, sync, stereo, feedback | P001–P004, P012 transport, core FFT/PCM fixtures, negative controls | PASS in tested core paths; each real GUI/host parameter-to-audio chain, variable automation and real-source quality not covered |
+| Cybernetic formant/Android/spectral/harmony | P005/P007/P017/P021; independent reference waveform, narrow frequency and speech diagnostics | PASS limited numeric cases; pitch accuracy off coherent frequency, formant intelligibility, phase transitions, real listening still open |
+| Reverse echo/swell and space | P004/P006 independent impulse oracles, full static graph regression | PASS limited core cases; exact native tail, real program transitions, full decay and extreme input open |
+| All ten modes / 120 presets | Core pairwise distinctness, level calibration on speech/TTS, direct editor selected preset | PASS inventory/finite renders/one preset UI; real host full preset inventory, all controls, perceptual curation open |
+| Session recall / automation / multi-instance | Portable corruption rollback, native and actual VST3 smoke, editor restore | PASS limited cases; independent concurrent state saves, dense automation, real host parameter sample offsets, restart/reentry open |
+| GUI resize, genuine artwork and live display | P021 direct native editor at 65/100/150%, signal PCM exact match, actual VST3 native-peer smoke; downloaded screenshots checked | PASS tested render and reopen; physical mouse, ctrl reset, DPI change, host attach return, capture of all actions open |
+| RT | P021 staged FFT improves some unpaced Linux p99 and overrun counts | FAIL high-rate deadline evidence; native paced worst-case, multi-instance, callback allocations/locks, real ASIO NOT RUN |
+| Steinberg validator | P022 independent source build and exact-module workflow | NOT RUN at authoring |
+| Test Lab | P022 P74 independent baseline | NOT RUN at authoring; product-specific complete feature matrix/native cases not declared |
+| User DAW, listening, release | None | NOT RUN; no GO, no final audit |
+
+Independent QA command follows Lab P74/P98 documentation, no product-specific host modifications. It runs the exact downloaded module with independent native hosts, plus official validator on pinned SDK. Read-only generic GUI discovery is not user action coverage. The source pin is Lab `7213fe1f81f4036f74431cb5b2d7dbd09b73ee5c` and SDK `3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96`. Results cannot qualify later binaries automatically. P022 workflow records provenance, hashes, actual logs and exit results, including failures. Artifact expiry causes failure rather than silently selecting a different binary. Further feature-specific independent oracles and technical audit remain required.

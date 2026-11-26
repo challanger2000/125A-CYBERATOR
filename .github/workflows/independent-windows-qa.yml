@@ -1,0 +1,104 @@
+name: Independent Windows validation
+on:
+  push:
+    branches: [develop/p001]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  independent-p021:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[independent-qa]')
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - name: Download exact P021 VST3 artifact (no product rebuild)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: CYBERATOR-development-not-release
+          run-id: 45742434356
+          github-token: ${{ github.token }}
+          path: exact-product
+      - name: Pin input bytes and provenance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          $bundles = @(Get-ChildItem exact-product -Directory -Recurse -Filter '*.vst3')
+          if ($bundles.Count -ne 1) { throw "Expected exactly one bundle" }
+          $modules = @(Get-ChildItem $bundles[0].FullName -File -Recurse -Filter '*.vst3')
+          if ($modules.Count -ne 1) { throw "Expected exactly one module" }
+          $hash = (Get-FileHash $modules[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '56478184e101e12d55fd1b37f6822aea68ec90bcaa591fb91029cb7e92e8d099') { throw "P021 binary mismatch" }
+          "PRODUCT_BUNDLE=$($bundles[0].FullName)" >> $env:GITHUB_ENV
+          [ordered]@{
+            product_commit='d2be596e9275838cfc38bdd4a0f414c8380252ba'
+            run_id=45742434356
+            artifact_id=15081968917
+            module_sha256=$hash
+            lab_commit='7213fe1f81f4036f74431cb5b2d7dbd09b73ee5c'
+            sdk_commit='3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96'
+            physical_asio='NOT RUN'
+            release_approved=$false
+          } | ConvertTo-Json | Set-Content evidence/provenance.json
+      - name: Checkout independent Test Lab
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: challanger2000/125A-Plugin-Test-Lab
+          ref: 7213fe1f81f4036f74431cb5b2d7dbd09b73ee5c
+          path: independent-lab
+          persist-credentials: false
+      - name: Build native independent hosts
+        shell: pwsh
+        run: |
+          cmake -S independent-lab -B lab-build -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Lab configure failed' }
+          $sdk = (git -C lab-build/_deps/vst3sdk-src rev-parse HEAD).Trim()
+          if ($sdk -ne '3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96') { throw 'SDK pin mismatch' }
+          cmake --build lab-build --config Release --parallel 2 --target TestLabHost TestLabGUI TestLabStateStress
+          if ($LASTEXITCODE -ne 0) { throw 'Lab build failed' }
+      - name: Build official Steinberg validator from same SDK (C++17)
+        shell: pwsh
+        run: |
+          cmake -S lab-build/_deps/vst3sdk-src -B validator-build -A x64 -DCMAKE_CXX_STANDARD=17 -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_RUN_VST_VALIDATOR=OFF
+          if ($LASTEXITCODE -ne 0) { throw 'Validator configure failed' }
+          cmake --build validator-build --config Release --parallel 2 --target validator
+          if ($LASTEXITCODE -ne 0) { throw 'Validator build failed' }
+      - name: Independent validation and technical baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $PSNativeCommandUseErrorActionPreference=$false
+          function UniqueExe([string]$root,[string]$name) {
+            $matches = @(Get-ChildItem $root -Recurse -File -Filter $name)
+            if ($matches.Count -ne 1) { throw "Expected one $name in $root" }
+            return $matches[0].FullName
+          }
+          $validator=UniqueExe validator-build 'validator.exe'
+          $audio=UniqueExe lab-build '125A_Test_Lab_Host.exe'
+          $gui=UniqueExe lab-build '125A_Test_Lab_GUI.exe'
+          $stress=UniqueExe lab-build '125A_Test_Lab_State_Stress.exe'
+          Get-FileHash @($validator,$audio,$gui,$stress) -Algorithm SHA256 | ConvertTo-Json | Set-Content evidence/host-hashes.json
+          & $validator $env:PRODUCT_BUNDLE 2>&1 | Tee-Object evidence/validator.log
+          $validatorExit=$LASTEXITCODE
+          $summary=[regex]::Match((Get-Content evidence/validator.log -Raw),'Result:\s+(\d+)\s+tests passed,\s+(\d+)\s+tests failed')
+          $validatorPass=$validatorExit -eq 0 -and $summary.Success -and [int]$summary.Groups[1].Value -gt 0 -and [int]$summary.Groups[2].Value -eq 0
+          python independent-lab/tests/run_universal_qa.py --plugin $env:PRODUCT_BUNDLE --gui-host $gui --audio-host $audio --stress-host $stress --run-technical-baseline --timeout 110 --out evidence/lab
+          $labExit=$LASTEXITCODE
+          [ordered]@{
+            validator_exit=$validatorExit
+            validator_pass=$validatorPass
+            validator_summary=$summary.Value
+            test_lab_exit=$labExit
+            full_audit='NOT RUN'
+            release_approved=$false
+          } | ConvertTo-Json | Set-Content evidence/result.json
+          if (-not $validatorPass -or $labExit -ne 0) { throw 'Independent gate failed; inspect retained evidence' }
+      - name: Retain all independent evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CYBERATOR-P021-independent-QA
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
