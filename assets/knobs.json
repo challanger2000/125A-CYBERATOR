@@ -1,0 +1,90 @@
+{
+  "repository": "challanger2000/125A-Knob-Designer",
+  "commit": "c09cff5d958969eb025fe09255173e65103deae9",
+  "assets": [
+    {
+      "file": "knob_s_100.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_S_64px_100pct_128f.png",
+      "width": 64,
+      "height": 8192,
+      "git_blob": "f273d308cc71616ad6c006293ad8e965afd0ed5c"
+    },
+    {
+      "file": "knob_s_150.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_S_96px_150pct_128f.png",
+      "width": 96,
+      "height": 12288,
+      "git_blob": "72b60d2e088d0bb3966143ebde1bbc2230e1232d"
+    },
+    {
+      "file": "knob_s_200.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_S_128px_200pct_128f.png",
+      "width": 128,
+      "height": 16384,
+      "git_blob": "f228c6187aef44ab328a91eede7329e15d9c8372"
+    },
+    {
+      "file": "knob_s_300.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_S_192px_300pct_128f.png",
+      "width": 192,
+      "height": 24576,
+      "git_blob": "697a2e1ddd730227de91b6da9c0280088a510974"
+    },
+    {
+      "file": "knob_m_100.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_M_96px_100pct_128f.png",
+      "width": 96,
+      "height": 12288,
+      "git_blob": "39bc0fea7bf9f7045685cc5994654ba532bc8ae6"
+    },
+    {
+      "file": "knob_m_150.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_M_144px_150pct_128f.png",
+      "width": 144,
+      "height": 18432,
+      "git_blob": "3428ce8d408627cc02909ac2d05852effa4cc2e2"
+    },
+    {
+      "file": "knob_m_200.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_M_192px_200pct_128f.png",
+      "width": 192,
+      "height": 24576,
+      "git_blob": "952cd1f9ffa5fa70b4c67e3def0a564be71f3085"
+    },
+    {
+      "file": "knob_m_300.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_M_288px_300pct_128f.png",
+      "width": 288,
+      "height": 36864,
+      "git_blob": "b3f387627f2526f59308b7d6421d92f71107613f"
+    },
+    {
+      "file": "knob_l_100.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_L_128px_100pct_128f.png",
+      "width": 128,
+      "height": 16384,
+      "git_blob": "76f9f064a2a234bbf5675f6770416bc03b4adfd6"
+    },
+    {
+      "file": "knob_l_150.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_L_192px_150pct_128f.png",
+      "width": 192,
+      "height": 24576,
+      "git_blob": "70f4f68b7462fbee4f52199d50d3af7b7b25c7af"
+    },
+    {
+      "file": "knob_l_200.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_L_256px_200pct_128f.png",
+      "width": 256,
+      "height": 32768,
+      "git_blob": "1c25b2ff43ce237f136054624ea9ee7fe4602ec7"
+    },
+    {
+      "file": "knob_l_300.png",
+      "path": "assets/mixengine/knobs/125A_MixEngine_Analog_L_384px_300pct_128f.png",
+      "width": 384,
+      "height": 49152,
+      "git_blob": "776a12411487ea5e2903c367529f662029171cf9"
+    }
+  ]
+}
