@@ -40,7 +40,7 @@ public:
     int getNumPrograms()override{return 1;}
     int getCurrentProgram()override{return 0;}
     void setCurrentProgram(int)override{}
-    const juce::String getProgramName(int)override{return {};}
+    const juce::String getProgramName(int index)override{return index==0?juce::String("Current Settings"):juce::String();}
     void changeProgramName(int,const juce::String&)override{}
     bool hasEditor()const override{return true;}
     juce::AudioProcessorEditor* createEditor()override{return new ui::Editor(*this,state_,capture_,uiScale_,[this](const Parameters& p){return applyParameters(p);});}

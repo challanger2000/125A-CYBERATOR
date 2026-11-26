@@ -3,6 +3,10 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <fstream>
+#include <iomanip>
+#include <cstdint>
+#include "support/PacedTiming.hpp"
 
 void require(bool ok,const char* message) {
     if(!ok){std::cerr<<message<<'\n';std::exit(1);}
@@ -43,6 +47,92 @@ void steadyGain(juce::AudioPluginInstance& p,double expected) {
         }
     }
 }
+
+template<class Create>
+int runRealtime(Create create){
+    using cyberator::test::TimingSample;
+    using cyberator::test::pace;
+    using cyberator::test::summarize;
+    std::ofstream csv("CYBERATOR-rt-groups.csv"),summary("CYBERATOR-rt-summary.csv");
+    require(bool(csv)&&bool(summary),"RT evidence files");
+    csv<<"rate,block,instances,active,group,process_us,start_late_us,finish_late_us\n";
+    summary<<"rate,block,instances,active,groups,budget_us,p50_us,p95_us,p99_us,max_us,duration_misses,completion_misses,max_start_late_us,max_finish_late_us,delta_energy,status\n";
+    csv<<std::setprecision(10);summary<<std::setprecision(10);
+    bool anyMiss=false;
+    for(double sr:{48000.,96000.,192000.})for(int block:{64,256})for(int n:{1,4})for(bool active:{false,true}){
+        std::vector<std::unique_ptr<juce::AudioPluginInstance>> plugins;
+        std::vector<juce::AudioBuffer<float>> buffers;
+        std::vector<juce::MidiBuffer> midi(static_cast<std::size_t>(n));
+        plugins.reserve(static_cast<std::size_t>(n));buffers.reserve(static_cast<std::size_t>(n));
+        constexpr std::pair<const char*,float> settings[]={
+            {"granular",1},{"size",1},{"density",1},{"position",.15f},{"scatter",.4f},
+            {"pitch",.75f},{"reverse",.5f},{"feedback",.5f},{"spread",.8f},
+            {"formant",.75f},{"android",.8f},{"spectral",.8f},{"harmony",.8f},
+            {"ghost",.8f},{"swell",.8f},{"delay",.8f},{"space",.8f},{"motion",.7f},
+            {"mix",1},{"output",.5f}
+        };
+        for(int k=0;k<n;++k){
+            auto p=create(sr,block);
+            require(p->getTotalNumInputChannels()==2&&p->getTotalNumOutputChannels()==2,"RT stereo buses");
+            p->setRateAndBufferSizeDetails(sr,block);p->prepareToPlay(sr,block);
+            require(p->getLatencySamples()>0,"RT reported latency");
+            if(active)for(const auto& [name,value]:settings){
+                auto* param=find(*p,name);require(param!=nullptr,"RT effect parameter missing");
+                param->setValueNotifyingHost(value);
+                require(std::abs(param->getValue()-value)<1e-4f,"RT active value accepted");
+            }
+            plugins.push_back(std::move(p));buffers.emplace_back(2,block);
+        }
+        std::int64_t position=0;
+        double delta=0,energy=0,maxDryError=0;
+        std::vector<TimingSample> rows;
+        auto source=[sr](std::int64_t i,int k){
+            if(i<0)return 0.f;
+            const double t=double(i)/sr;
+            return float((.22*std::sin(1031*t)+.12*std::cos(2371*t))*(1-.05*k));
+        };
+        auto setup=[&](std::size_t){
+            for(int k=0;k<n;++k)for(int i=0;i<block;++i){
+                const float x=source(position+i,k);
+                buffers[static_cast<std::size_t>(k)].setSample(0,i,x);
+                buffers[static_cast<std::size_t>(k)].setSample(1,i,x*.7f);
+            }
+        };
+        auto process=[&](std::size_t){
+            for(int k=0;k<n;++k)plugins[static_cast<std::size_t>(k)]->processBlock(buffers[static_cast<std::size_t>(k)],midi[static_cast<std::size_t>(k)]);
+        };
+        auto observe=[&](std::size_t){
+            for(int k=0;k<n;++k)for(int i=0;i<block;++i){
+                const auto idx=static_cast<std::size_t>(k);
+                const float x=source(position+i-plugins[idx]->getLatencySamples(),k);
+                const double l=buffers[idx].getSample(0,i),r=buffers[idx].getSample(1,i);
+                require(std::isfinite(l)&&std::isfinite(r),"RT finite audio");
+                energy+=l*l+r*r;
+                const double dl=l-x,dr=r-x*.7f;
+                delta+=dl*dl+dr*dr;maxDryError=std::max({maxDryError,std::abs(dl),std::abs(dr)});
+            }
+            position+=block;
+        };
+        std::thread worker([&]{
+            const auto warm=static_cast<std::size_t>(std::ceil(1.25*sr/block));
+            for(std::size_t i=0;i<warm;++i){setup(i);process(i);position+=block;}
+            rows=pace(sr,block,512,setup,process,observe);
+        });
+        worker.join();
+        require(energy>1,"RT non-silent real module output");
+        require(active?delta>1:maxDryError<1e-6,"RT active/neutral PCM witness");
+        const double budget=1e6*block/sr;const auto s=summarize(rows,budget);
+        const bool pass=s.durationMisses==0&&s.completionMisses==0;anyMiss|=!pass;
+        for(std::size_t i=0;i<rows.size();++i)csv<<sr<<','<<block<<','<<n<<','<<active<<','<<i<<','<<rows[i].processUs<<','<<rows[i].startLateUs<<','<<rows[i].finishLateUs<<'\n';
+        summary<<sr<<','<<block<<','<<n<<','<<active<<','<<rows.size()<<','<<budget<<','<<s.p50<<','<<s.p95<<','<<s.p99<<','<<s.maximum<<','<<s.durationMisses<<','<<s.completionMisses<<','<<s.maxStartLate<<','<<s.maxFinishLate<<','<<delta<<','<<(pass?"PASS":"FAIL")<<'\n';
+        summary.flush();csv.flush();require(bool(summary)&&bool(csv),"RT evidence write");
+        std::cout<<sr<<" Hz / "<<block<<" / "<<n<<" instances / active "<<active<<": p99 "<<s.p99<<" us, duration misses "<<s.durationMisses<<", completion misses "<<s.completionMisses<<'\n';
+        for(auto& p:plugins)p->releaseResources();
+    }
+    std::cout<<"Paced Windows VM VST3 diagnostic: "<<(anyMiss?"RT_FAIL":"RT_PASS_IN_TESTED_MATRIX")<<"; physical ASIO NOT RUN\n";
+    return anyMiss?3:0;
+}
+
 int main(int argc,char** argv) {
     require(argc==2||argc==3,"module path argument");
     juce::ScopedJuceInitialiser_GUI init;
@@ -54,13 +144,14 @@ int main(int argc,char** argv) {
     juce::OwnedArray<juce::PluginDescription> types;
     format.findAllTypesForFile(types,bundle.getFullPathName());
     require(types.size()==1,"single scanned VST3 class");
-    auto create=[&]{
+    auto create=[&](double rate=48000,int frames=127){
         juce::String error;
-        auto p=format.createInstanceFromDescription(*types[0],48000,127,error);
+        auto p=format.createInstanceFromDescription(*types[0],rate,frames,error);
         if(!p)std::cerr<<error.toStdString()<<'\n';
         require(p!=nullptr,"load actual VST3");
         return p;
     };
+    if(argc==3&&std::string_view(argv[2])=="rt")return runRealtime(create);
     if(argc==3){
         require(std::string_view(argv[2])=="editor","editor mode argument");
         auto p=create();prepare(*p);

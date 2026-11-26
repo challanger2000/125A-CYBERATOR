@@ -17,4 +17,20 @@ int main(){
     Engine a,b;a.prepare(48000);b.prepare(48000);const auto L=a.latency();
     for(int mode=0;mode<7;++mode){a.reset();b.reset();EngineParams p,q;switch(mode){case 0:p.granular=.8;break;case 1:p.cyber.formant=8;break;case 2:p.harmony=1;break;case 3:p.ghost=1;break;case 4:p.swell=1;break;case 5:p.delay=1;break;case 6:p.space=1;break;}
         double delta=0;for(std::size_t i=0;i<L+48000;++i){float x=i<24000?float(.3*std::sin(.031*double(i))+.2*std::cos(.13*double(i))):0;const auto u=a.process({x,x*.7f},p),v=b.process({x,x*.7f},q);check(std::isfinite(u.left)&&std::isfinite(u.right),"graph finite");delta+=std::abs(u.left-v.left);}std::cout<<"mode "<<mode<<" delta "<<delta<<'\n';check(delta>1,"independent effect changes PCM");}
+
+    // A tiny cybernetic change at 100% granular must not introduce half the original source.
+    a.reset();b.reset();EngineParams original,changed;
+    original.granular=changed.granular=1;
+    original.grain.position=changed.grain.position=.1;
+    double peak=0;bool difference=false;
+    for(int i=0;i<96000;++i){
+        changed.cyber.android=i>=24000&&i<60000?.001:0;
+        const float x=float(.3*std::sin(.041*i)+.2*std::cos(.113*i));
+        const auto u=a.process({x,x*.7f},original),v=b.process({x,x*.7f},changed);
+        const double d=std::abs(double(u.left)-v.left);
+        peak=std::max(peak,d);difference|=d>1e-7;
+        if(i>=84000)check(u.left==v.left&&u.right==v.right,"exact settled routing release");
+    }
+    std::cout<<"tiny spectral control at full granular peak difference "<<peak<<'\n';
+    check(difference&&peak<.001,"continuous actual graph near-zero spectral routing");
 }

@@ -38,3 +38,22 @@ jobs:
           path: build/Cyberator_artefacts/Release/VST3/*.vst3/
           if-no-files-found: error
           retention-days: 3
+      - name: Measure paced single and four instance actual VST3
+        shell: pwsh
+        run: |
+          $module = @(Get-ChildItem build -Recurse -File -Filter '*.vst3' | Where-Object { $_.FullName -match 'x86_64-win' })
+          $hostExe = @(Get-ChildItem build -Recurse -File -Filter 'vst3_host_test.exe')
+          if ($module.Count -ne 1 -or $hostExe.Count -ne 1) { throw 'Missing exact built VST3 or RT host' }
+          Push-Location build
+          try {
+            & $hostExe[0].FullName $module[0].FullName rt
+            if ($LASTEXITCODE -ne 0) { throw 'Paced RT gate not passed; see actual duration and completion counts' }
+          } finally { Pop-Location }
+      - name: Retain paced realtime evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CYBERATOR-paced-RT-evidence
+          path: build/CYBERATOR-rt-*.csv
+          if-no-files-found: warn
+          retention-days: 14

@@ -12,8 +12,10 @@ Baseline: exact P021 `d2be596e9275838cfc38bdd4a0f414c8380252ba`, verified Window
 | Session recall / automation / multi-instance | Portable corruption rollback, native and actual VST3 smoke, editor restore | PASS limited cases; independent concurrent state saves, dense automation, real host parameter sample offsets, restart/reentry open |
 | GUI resize, genuine artwork and live display | P021 direct native editor at 65/100/150%, signal PCM exact match, actual VST3 native-peer smoke; downloaded screenshots checked | PASS tested render and reopen; physical mouse, ctrl reset, DPI change, host attach return, capture of all actions open |
 | RT | P021 staged FFT improves some unpaced Linux p99 and overrun counts | FAIL high-rate deadline evidence; native paced worst-case, multi-instance, callback allocations/locks, real ASIO NOT RUN |
-| Steinberg validator | P022 independent source build and exact-module workflow | NOT RUN at authoring |
-| Test Lab | P022 P74 independent baseline | NOT RUN at authoring; product-specific complete feature matrix/native cases not declared |
+| Steinberg validator | P022 exact-module official validator | FAIL 46/47, advertised program 0 unnamed; P023 fix pending retest |
+| Test Lab | P022 P74 independent baseline, six playback/save cases | TECHNICAL_BASELINE_PASS for P021; product-specific complete feature matrix/native cases not declared |
 | User DAW, listening, release | None | NOT RUN; no GO, no final audit |
 
 Independent QA command follows Lab P74/P98 documentation, no product-specific host modifications. It runs the exact downloaded module with independent native hosts, plus official validator on pinned SDK. Read-only generic GUI discovery is not user action coverage. The source pin is Lab `7213fe1f81f4036f74431cb5b2d7dbd09b73ee5c` and SDK `3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96`. Results cannot qualify later binaries automatically. P022 workflow records provenance, hashes, actual logs and exit results, including failures. Artifact expiry causes failure rather than silently selecting a different binary. Further feature-specific independent oracles and technical audit remain required.
+
+P023 changes the product source; the P021 independent evidence is historical, not current-binary acceptance. P023 native and full-graph tests are pending. High-rate RT gate remains open; diagnostic collects duration and scheduled completion independently.

@@ -11,6 +11,7 @@ int main(){
     juce::ScopedJuceInitialiser_GUI init;
     std::unique_ptr<juce::AudioProcessor> p(createPluginFilter());
     require(p!=nullptr,"factory");
+    require(p->getNumPrograms()==1&&p->getProgramName(0)=="Current Settings","named current host program");
     require(p->getParameters().size()==int(cyberator::Parameters::count),"parameter count");
     for(const auto& s:cyberator::specs){
         bool found=false;

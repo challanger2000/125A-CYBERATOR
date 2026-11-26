@@ -5,6 +5,7 @@
 #include "Ghost.hpp"
 #include "Space.hpp"
 #include "Modes.hpp"
+#include "ParallelRouting.hpp"
 namespace cyberator {
 enum class LatencyProfile { studio, live };
 struct EngineSignals { StereoFrame dry{},echo{},swell{}; std::uint64_t launches{}; };
@@ -20,14 +21,14 @@ public:
     void prepare(double sr,LatencyProfile profile=LatencyProfile::studio){
         Engine fresh;const bool live=profile==LatencyProfile::live;
         fresh.granular_.prepare(sr);fresh.cyber_.prepare(sr,live);fresh.harmony_.prepare(sr);
-        fresh.ghost_.prepare(sr,live);fresh.space_.prepare(sr);fresh.sr_=sr;
+        fresh.ghost_.prepare(sr,live);fresh.space_.prepare(sr);fresh.routing_.prepare(sr);fresh.sr_=sr;
         fresh.downstreamWarmup_=fresh.cyber_.extraLatency();
         fresh.spectralDelay_=fresh.cyber_.latency();fresh.latency_=fresh.spectralDelay_+fresh.ghost_.latency();
         fresh.dry_.prepare(fresh.latency_+1);fresh.grainDelay_.prepare(fresh.spectralDelay_+1);
         *this=std::move(fresh);
     }
     void reset() noexcept {
-        motionPhase_=0;downstreamWarmup_=cyber_.extraLatency();dry_.reset();grainDelay_.reset();granular_.reset();cyber_.reset();harmony_.reset();ghost_.reset();space_.reset();
+        motionPhase_=0;routing_.reset();downstreamWarmup_=cyber_.extraLatency();dry_.reset();grainDelay_.reset();granular_.reset();cyber_.reset();harmony_.reset();ghost_.reset();space_.reset();
     }
     [[nodiscard]] std::size_t latency()const noexcept{return latency_;}
     [[nodiscard]] StereoFrame process(StereoFrame in,const EngineParams& p,EngineSignals* signals=nullptr) noexcept {
@@ -43,8 +44,8 @@ public:
         if(motion>0)gp.position=unit(unit(gp.position)+.4*motion*std::sin(2*std::numbers::pi*motionPhase_));
         motionPhase_+=v.motionHz/sr_;if(motionPhase_>=1)motionPhase_-=1;
         grainDelay_.capture(granular_.process(in,gp));const auto grain=grainDelay_.read(spectralDelay_);
-        const bool cyberActive=nonzero(cp.formant)||cp.android>0||cp.spectral>0;
-        const auto main=cyberActive?blend(cg,grain,g/(1+g)):blend(base,grain,g);
+        const auto route=routing_.process(g,cp.formant,cp.android,cp.spectral);
+        const auto main=blend(blend(base,cg,route.spectral),grain,route.granular);
         // Align downstream time-varying phases to the original signal timeline.
         if(downstreamWarmup_){--downstreamWarmup_;if(signals)*signals={dry,{},{},granular_.launches()};return dry;}
         const auto harmony=harmony_.process(main,unit(unit(p.harmony)*v.harmony));
@@ -60,7 +61,6 @@ public:
         return blend(dry,effected,m);
     }
 private:
-    static bool nonzero(double x)noexcept{return std::isfinite(x)&&x!=0;}
     static double unit(double x)noexcept{return std::isfinite(x)?std::clamp(x,0.,1.):0.;}
     static StereoFrame add(StereoFrame a,StereoFrame b)noexcept{return {finiteSample(double(a.left)+b.left),finiteSample(double(a.right)+b.right)};}
     static StereoFrame scale(StereoFrame a,double g)noexcept{return {finiteSample(a.left*g),finiteSample(a.right*g)};}
@@ -69,7 +69,7 @@ private:
         if(m==1)return b;
         return {finiteSample((1-m)*a.left+m*b.left),finiteSample((1-m)*a.right+m*b.right)};
     }
-    History dry_,grainDelay_;Granular granular_;Cybernetic cyber_;Harmony harmony_;Ghost ghost_;Space space_;
+    History dry_,grainDelay_;Granular granular_;Cybernetic cyber_;Harmony harmony_;Ghost ghost_;Space space_;ParallelRouting routing_;
     std::size_t spectralDelay_{},latency_{},downstreamWarmup_{};double sr_{},motionPhase_{};
 };
 } // namespace cyberator
