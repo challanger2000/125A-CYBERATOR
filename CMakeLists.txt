@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(CyberatorCore VERSION 0.0.1 LANGUAGES CXX)
+project(CyberatorCore VERSION 0.0.1 LANGUAGES C CXX)
 include(CTest)
 if(BUILD_TESTING)
     add_executable(history_test tests/history_test.cpp)
@@ -54,4 +54,33 @@ if(BUILD_TESTING)
     target_compile_features(parameters_test PRIVATE cxx_std_23)
     target_include_directories(parameters_test PRIVATE src)
     add_test(NAME parameters_contract COMMAND parameters_test)
+endif()
+
+option(CYBERATOR_BUILD_VST3 "Build the development Windows x64 JUCE VST3" OFF)
+if(CYBERATOR_BUILD_VST3)
+    if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+        message(FATAL_ERROR "The only approved plugin target is Windows x64 VST3")
+    endif()
+    include(FetchContent)
+    FetchContent_Declare(JUCE
+        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+        GIT_TAG 654bdbc7a9db0dae90849b44abe91f339e9f0768
+        GIT_SHALLOW FALSE)
+    FetchContent_MakeAvailable(JUCE)
+    juce_add_plugin(Cyberator
+        COMPANY_NAME "125A Systems"
+        BUNDLE_ID "com.125asystems.cyberator"
+        PLUGIN_MANUFACTURER_CODE A125
+        PLUGIN_CODE Cybr
+        FORMATS VST3
+        PRODUCT_NAME "125A CYBERATOR"
+        IS_SYNTH FALSE
+        NEEDS_MIDI_INPUT FALSE
+        NEEDS_MIDI_OUTPUT FALSE
+        COPY_PLUGIN_AFTER_BUILD FALSE)
+    target_sources(Cyberator PRIVATE src/plugin/Processor.cpp)
+    target_include_directories(Cyberator PRIVATE src)
+    target_compile_features(Cyberator PRIVATE cxx_std_23)
+    target_compile_definitions(Cyberator PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+    target_link_libraries(Cyberator PRIVATE juce::juce_audio_processors juce::juce_recommended_config_flags)
 endif()
