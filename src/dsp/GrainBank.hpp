@@ -26,25 +26,30 @@ public:
     static constexpr int taps = 48, phases = 256, bands = 9;
     static constexpr int before = 23, after = 24;
     void prepare() {
-        std::vector<float> table(bands * (phases + 1) * taps);
-        for (int b = 0; b < bands; ++b) {
-            const double cutoff = b == 0 ? 1.0 : 0.92 / std::exp2(b / 4.0);
-            for (int p = 0; p <= phases; ++p) {
-                const double frac = double(p) / phases;
-                double sum = 0;
-                for (int k = 0; k < taps; ++k) {
-                    const double x = k - before - frac;
-                    const double z = std::numbers::pi * cutoff * x;
-                    const double window = 0.42 + 0.5 * std::cos(std::numbers::pi * x / 24.0)
-                                        + 0.08 * std::cos(2 * std::numbers::pi * x / 24.0);
-                    const double w = cutoff * (z == 0 ? 1.0 : std::sin(z) / z) * window;
-                    table[index(b, p, k)] = float(w);
-                    sum += w;
+        // One immutable, sample-rate-independent table per loaded module.
+        // Thread-safe static initialization occurs only in prepare(), never read().
+        static const auto shared = [] {
+            std::vector<float> table(bands * (phases + 1) * taps);
+            for (int b = 0; b < bands; ++b) {
+                const double cutoff = b == 0 ? 1.0 : 0.92 / std::exp2(b / 4.0);
+                for (int p = 0; p <= phases; ++p) {
+                    const double frac = double(p) / phases;
+                    double sum = 0;
+                    for (int k = 0; k < taps; ++k) {
+                        const double x = k - before - frac;
+                        const double z = std::numbers::pi * cutoff * x;
+                        const double window = 0.42 + 0.5 * std::cos(std::numbers::pi * x / 24.0)
+                                            + 0.08 * std::cos(2 * std::numbers::pi * x / 24.0);
+                        const double w = cutoff * (z == 0 ? 1.0 : std::sin(z) / z) * window;
+                        table[index(b, p, k)] = float(w);
+                        sum += w;
+                    }
+                    for (int k = 0; k < taps; ++k) table[index(b,p,k)] /= float(sum);
                 }
-                for (int k = 0; k < taps; ++k) table[index(b,p,k)] /= float(sum);
             }
-        }
-        table_.swap(table);
+            return table;
+        }();
+        table_=shared.data();
     }
     [[nodiscard]] static int bandFor(double rate) noexcept {
         if (!std::isfinite(rate) || std::abs(rate) > 4.0) return -1;
@@ -52,7 +57,7 @@ public:
     }
     struct KernelCache { int band{-1},phase{-1}; double fraction{}; std::array<double,taps> weights{}; };
     [[nodiscard]] StereoFrame read(const History& history, double age, int band, KernelCache* cache=nullptr) const noexcept {
-        if (table_.empty() || band < 0 || band >= bands || !std::isfinite(age) ||
+        if (!table_ || band < 0 || band >= bands || !std::isfinite(age) ||
             age < before || history.valid() <= std::size_t(after) ||
             age >= double(history.valid() - after)) return {};
         const auto i = std::size_t(age);
@@ -61,7 +66,7 @@ public:
         const double f = phase - p;
         const auto* samples = history.backwardWindow(i - before, taps);
         if (!samples) return {};
-        const auto* a = table_.data() + index(band,p,0);
+        const auto* a = table_ + index(band,p,0);
         const auto* b = a + taps;
         if (cache && (cache->band != band || cache->phase != p || cache->fraction != f)) {
             cache->band=band; cache->phase=p; cache->fraction=f;
@@ -94,7 +99,7 @@ private:
     static constexpr std::size_t index(int b, int p, int k) noexcept {
         return std::size_t((b*(phases+1)+p)*taps+k);
     }
-    std::vector<float> table_;
+    const float* table_{};
 };
 
 // Trigger between process calls. Positive rate traverses source forwards; negative reverses it.
